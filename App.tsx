@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, ChangeEvent, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import type { Mode, CreateFunction, EditFunction, UploadedImage, HistoryEntry, UploadProgress } from './types';
 import { generateImage, processImagesWithPrompt } from './services/geminiService';
@@ -36,6 +37,7 @@ interface ImageEditorProps {
 
 interface ImageEditorRef {
   getMaskData: () => UploadedImage | null;
+  hasMaskData: () => boolean;
   getOriginalImageSize: () => { width: number, height: number } | null;
 }
 
@@ -51,7 +53,6 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
     const [maskTool, setMaskTool] = useState<'brush' | 'eraser'>('brush');
     const [maskOpacity, setMaskOpacity] = useState<number>(0.6);
     const [brushSize, setBrushSize] = useState(40);
-    // FIX: Corrected useRef initialization syntax. The parenthesis was misplaced, causing a syntax error.
     const lastPositionRef = useRef<{ x: number, y: number } | null>(null);
     const [cursorPreview, setCursorPreview] = useState({ x: 0, y: 0, visible: false });
     
@@ -198,7 +199,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
         const data = imageData.data;
         
         const alpha = Math.round(opacity * 255);
-        const fillColorRgba = [255, 255, 255, alpha];
+        const fillColorRgba = [74, 222, 128, alpha]; // Green
         
         const startPixelPos = (startY * width + startX) * 4;
         
@@ -285,7 +286,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
         tempCtx.lineWidth = brushSize;
         tempCtx.lineCap = 'round';
         tempCtx.lineJoin = 'round';
-        tempCtx.strokeStyle = `rgba(255, 255, 255, ${maskOpacity})`;
+        tempCtx.strokeStyle = `rgba(74, 222, 128, ${maskOpacity})`; // Green
         tempCtx.stroke();
         
         floodFill(tempCanvas, seedX, seedY, maskOpacity);
@@ -334,7 +335,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
 
         if (maskTool === 'brush') {
             ctx.globalCompositeOperation = 'source-over';
-            ctx.strokeStyle = `rgba(255, 255, 255, ${maskOpacity})`;
+            ctx.strokeStyle = `rgba(74, 222, 128, ${maskOpacity})`; // Green
         } else {
             ctx.globalCompositeOperation = 'destination-out';
             ctx.strokeStyle = 'rgba(0,0,0,1)';
@@ -380,6 +381,19 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
             const dataUrl = maskCanvas.toDataURL('image/png');
             const base64 = dataUrl.split(',')[1];
             return { base64, mimeType: 'image/png' };
+        },
+        hasMaskData: () => {
+            const maskCanvas = maskCanvasRef.current;
+            if (!maskCanvas) return false;
+            const ctx = maskCanvas.getContext('2d', { willReadFrequently: true });
+            if (!ctx) return false;
+            const imageData = ctx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+            for (let i = 3; i < imageData.data.length; i += 4) {
+                if (imageData.data[i] > 10) { 
+                    return true;
+                }
+            }
+            return false;
         },
         getOriginalImageSize: () => {
             return originalImageSizeRef.current.width > 0 ? originalImageSizeRef.current : null;
@@ -534,11 +548,11 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
                         width: brushSize * transform.scale,
                         height: brushSize * transform.scale,
                         transform: 'translate(-50%, -50%)',
-                        borderColor: 'rgba(255, 255, 255, 0.8)',
+                        borderColor: maskTool === 'brush' ? 'rgba(74, 222, 128, 0.8)' : 'rgba(239, 68, 68, 0.8)',
                         boxShadow: '0 0 8px rgba(0, 0, 0, 0.5)',
                         transition: 'width 0.1s ease, height 0.1s ease',
                         ...(maskTool === 'eraser' && {
-                            backgroundColor: 'rgba(0, 0, 0, 0.2)'
+                             backgroundColor: 'rgba(239, 68, 68, 0.2)'
                         })
                     }}
                 />
@@ -565,10 +579,10 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
                     <div className="bg-gray-900/90 backdrop-blur-sm p-2 rounded-xl flex items-center gap-3 shadow-lg ring-1 ring-white/10">
                         <div className="flex bg-gray-950/70 p-1 rounded-md">
                             <button onClick={() => setMaskTool('brush')} title="Pincel" className={`p-2 rounded transition-colors ${maskTool === 'brush' ? 'bg-gray-700' : 'hover:bg-gray-800'}`}>
-                                <span className="material-symbols-outlined text-xl">brush</span>
+                                <span className={`material-symbols-outlined text-xl transition-colors ${maskTool === 'brush' ? 'text-green-400' : 'text-gray-400'}`}>brush</span>
                             </button>
                             <button onClick={() => setMaskTool('eraser')} title="Borracha" className={`p-2 rounded transition-colors ${maskTool === 'eraser' ? 'bg-gray-700' : 'hover:bg-gray-800'}`}>
-                                <span className="material-symbols-outlined text-xl">ink_eraser</span>
+                                <span className={`material-symbols-outlined text-xl transition-colors ${maskTool === 'eraser' ? 'text-red-500' : 'text-gray-400'}`}>ink_eraser</span>
                             </button>
                             <button onClick={clearMask} className="p-2 rounded hover:bg-gray-800 transition-colors" title="Limpar Seleção">
                             <span className="material-symbols-outlined text-xl text-gray-400 hover:text-gray-300">deselect</span>
@@ -617,6 +631,37 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
     );
 });
 
+
+interface ConfirmationDialogProps {
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    onCancel: () => void;
+}
+
+const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({ isOpen, title, message, onConfirm, onCancel }) => {
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+            <div className="bg-gray-900 p-6 rounded-lg max-w-sm w-full shadow-xl ring-1 ring-white/10">
+                <h2 className="text-xl font-bold mb-4 text-gray-100">{title}</h2>
+                <p className="text-gray-300 mb-6">{message}</p>
+                <div className="flex justify-end gap-3">
+                    <button onClick={onCancel} className="px-4 py-2 text-sm font-semibold rounded-lg bg-gray-800 hover:bg-gray-700 transition-colors">
+                        Cancelar
+                    </button>
+                    <button onClick={onConfirm} className="px-4 py-2 text-sm font-semibold rounded-lg bg-gray-600 hover:bg-gray-500 text-white transition-colors">
+                        Confirmar
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+
 function App() {
     const [prompt, setPrompt] = useState<string>('');
     const [mode, setMode] = useState<Mode>('create');
@@ -642,28 +687,74 @@ function App() {
     const [dragTarget, setDragTarget] = useState<'main' | 'reference' | null>(null);
     const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([]);
 
+    const [confirmationDialog, setConfirmationDialog] = useState({
+        isOpen: false,
+        title: '',
+        message: '',
+        onConfirm: () => {},
+    });
+
+    const closeConfirmationDialog = () => {
+        setConfirmationDialog(prev => ({ ...prev, isOpen: false }));
+    };
+
+    const handleConfirm = () => {
+        confirmationDialog.onConfirm();
+        closeConfirmationDialog();
+    };
+
+
     const resetImages = () => {
         setImages([]);
         setImagePreviews([]);
     };
 
+    const isEditStateDirty = useCallback(() => {
+        if (mode !== 'edit' || !generatedImage) return false;
+        
+        const hasMask = editorRef.current?.hasMaskData() ?? false;
+        const hasPrompt = prompt.trim() !== '';
+        const hasRefImages = images.length > 0;
+    
+        return hasMask || hasPrompt || hasRefImages;
+    }, [mode, generatedImage, prompt, images]);
+
+
     const handleModeToggle = (newMode: Mode) => {
         if (newMode === mode) return;
 
-        setMode(newMode);
-        resetImages();
-        
-        if (newMode === 'create') {
+        const performSwitchToCreate = () => {
+            setMode('create');
+            resetImages();
             setHistory([]);
             setHistoryIndex(-1);
-        } else { 
+            setPrompt('');
+        };
+
+        if (newMode === 'create' && mode === 'edit' && isEditStateDirty()) {
+            setConfirmationDialog({
+                isOpen: true,
+                title: 'Descartar Alterações?',
+                message: 'Você tem edições não salvas (prompt, imagens de referência ou máscara) que serão perdidas. Deseja continuar?',
+                onConfirm: performSwitchToCreate
+            });
+            return;
+        }
+
+        if (newMode === 'create') {
+            performSwitchToCreate();
+        } else { // Switching to 'edit'
+            setMode('edit');
+            resetImages();
             if (generatedImage) {
-                 const currentEntry = history[historyIndex];
-                 setHistory([currentEntry]);
-                 setHistoryIndex(0);
+                const currentEntry = history[historyIndex];
+                setHistory([currentEntry]);
+                setHistoryIndex(0);
+                setPrompt(currentEntry.prompt);
             } else {
-                 setHistory([]);
-                 setHistoryIndex(-1);
+                setHistory([]);
+                setHistoryIndex(-1);
+                setPrompt('');
             }
         }
     };
@@ -701,14 +792,11 @@ function App() {
     const handleEditFunctionClick = (func: EditFunction) => {
         setActiveEditFunction(func);
     };
-
-    const handleImageUpload = useCallback((files: FileList | null, target: 'main' | 'reference') => {
-        if (!files || files.length === 0 || mode !== 'edit') return;
-
+    
+    const processUploadedFiles = useCallback((files: File[], target: 'main' | 'reference') => {
         let isMainImageSlotFilled = history.length > 0;
-        const filesToProcess = Array.from(files);
+        const filesToProcess = [...files];
 
-        // If the target is the main canvas, only process the first file.
         if (target === 'main' && filesToProcess.length > 1) {
             filesToProcess.splice(1);
         }
@@ -765,6 +853,7 @@ function App() {
                     setHistoryIndex(0);
                     setImages([]);
                     setImagePreviews([]);
+                    setPrompt('');
                     isMainImageSlotFilled = true;
                 } else {
                     setImages(prev => [...prev, uploadedImage]);
@@ -776,7 +865,23 @@ function App() {
             
             reader.readAsDataURL(file);
         });
-    }, [mode, history.length, activeEditFunction, styleIntensity]);
+    }, [history.length, activeEditFunction, styleIntensity]);
+
+    const handleImageUpload = useCallback((files: FileList | null, target: 'main' | 'reference') => {
+        if (!files || files.length === 0 || mode !== 'edit') return;
+
+        if (target === 'main' && generatedImage && isEditStateDirty()) {
+            setConfirmationDialog({
+                isOpen: true,
+                title: 'Iniciar Nova Edição?',
+                message: 'Isso substituirá a imagem atual e descartará todas as edições não salvas. Deseja continuar?',
+                onConfirm: () => processUploadedFiles(Array.from(files), target)
+            });
+            return;
+        }
+        
+        processUploadedFiles(Array.from(files), target);
+    }, [mode, generatedImage, isEditStateDirty, processUploadedFiles]);
 
 
     const handleRemoveImage = (indexToRemove: number) => {
@@ -901,7 +1006,6 @@ function App() {
 
     const handleRedo = () => {
         if (historyIndex < history.length - 1) {
-            // FIX: Corrected redo logic to increment the history index instead of decrementing.
             handleHistoryNavigation(historyIndex + 1);
         }
     };
@@ -947,6 +1051,13 @@ function App() {
 
     return (
         <div className="flex h-screen font-sans">
+            <ConfirmationDialog
+                isOpen={confirmationDialog.isOpen}
+                title={confirmationDialog.title}
+                message={confirmationDialog.message}
+                onConfirm={handleConfirm}
+                onCancel={closeConfirmationDialog}
+            />
             {showMobileModal && (
                 <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
                     <div className="bg-gray-900 p-8 rounded-lg text-center max-w-sm">
