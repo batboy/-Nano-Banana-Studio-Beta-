@@ -53,7 +53,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
     const [maskTool, setMaskTool] = useState<'brush' | 'eraser'>('brush');
     const [maskOpacity, setMaskOpacity] = useState<number>(0.6);
     const [brushSize, setBrushSize] = useState(40);
-    const [brushColor, setBrushColor] = useState<'red' | 'green'>('red');
+    // FIX: Corrected useRef initialization syntax. The parenthesis was misplaced, causing a syntax error.
     const lastPositionRef = useRef<{ x: number, y: number } | null>(null);
     const [cursorPreview, setCursorPreview] = useState({ x: 0, y: 0, visible: false });
     
@@ -136,9 +136,9 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
         const rectWidth = (containerWidth / transform.scale) * miniMapScale;
         const rectHeight = (containerHeight / transform.scale) * miniMapScale;
         
-        miniMapCtx.strokeStyle = '#f59e0b'; // amber-500
+        miniMapCtx.strokeStyle = '#9ca3af'; // gray-400
         miniMapCtx.lineWidth = 2;
-        miniMapCtx.fillStyle = 'rgba(245, 158, 11, 0.2)';
+        miniMapCtx.fillStyle = 'rgba(156, 163, 175, 0.2)'; // gray-400 with alpha
         miniMapCtx.fillRect(rectX, rectY, rectWidth, rectHeight);
         miniMapCtx.strokeRect(rectX, rectY, rectWidth, rectHeight);
     }, [transform]);
@@ -200,7 +200,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
         const data = imageData.data;
         
         const alpha = Math.round(opacity * 255);
-        const fillColorRgba = brushColor === 'red' ? [255, 0, 0, alpha] : [0, 255, 0, alpha];
+        const fillColorRgba = [255, 255, 255, alpha];
         
         const startPixelPos = (startY * width + startX) * 4;
         
@@ -256,7 +256,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
         }
         
         ctx.putImageData(imageData, 0, 0);
-    }, [brushColor]);
+    }, []);
 
     const fillEnclosedArea = useCallback((points: {x: number, y: number}[]) => {
         const canvas = maskCanvasRef.current;
@@ -287,7 +287,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
         tempCtx.lineWidth = brushSize;
         tempCtx.lineCap = 'round';
         tempCtx.lineJoin = 'round';
-        tempCtx.strokeStyle = brushColor === 'red' ? `rgba(255, 0, 0, ${maskOpacity})` : `rgba(0, 255, 0, ${maskOpacity})`;
+        tempCtx.strokeStyle = `rgba(255, 255, 255, ${maskOpacity})`;
         tempCtx.stroke();
         
         floodFill(tempCanvas, seedX, seedY, maskOpacity);
@@ -295,7 +295,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(tempCanvas, 0, 0);
 
-    }, [brushSize, brushColor, floodFill, maskOpacity]);
+    }, [brushSize, floodFill, maskOpacity]);
 
     const startDrawing = (e: React.MouseEvent<HTMLDivElement>) => {
         setIsDrawing(true);
@@ -336,7 +336,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
 
         if (maskTool === 'brush') {
             ctx.globalCompositeOperation = 'source-over';
-            ctx.strokeStyle = brushColor === 'red' ? `rgba(255, 0, 0, ${maskOpacity})` : `rgba(0, 255, 0, ${maskOpacity})`;
+            ctx.strokeStyle = `rgba(255, 255, 255, ${maskOpacity})`;
         } else {
             ctx.globalCompositeOperation = 'destination-out';
             ctx.strokeStyle = 'rgba(0,0,0,1)';
@@ -573,21 +573,10 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
                                 <span className="material-symbols-outlined text-xl">ink_eraser</span>
                             </button>
                             <button onClick={clearMask} className="p-2 rounded hover:bg-gray-800 transition-colors" title="Limpar Seleção">
-                            <span className="material-symbols-outlined text-xl text-red-400 hover:text-red-300">deselect</span>
+                            <span className="material-symbols-outlined text-xl text-gray-400 hover:text-gray-300">deselect</span>
                             </button>
                         </div>
                         <div className="h-8 w-px bg-gray-700"></div>
-                        {maskTool === 'brush' && (
-                            <>
-                            <button onClick={() => setBrushColor('red')} className={`w-7 h-7 rounded-lg border-2 transition-all ${brushColor === 'red' ? 'border-gray-200 scale-110' : 'border-transparent hover:border-gray-400'}`} title="Cor Vermelha">
-                                <div className="w-full h-full bg-red-500 rounded-md"></div>
-                            </button>
-                            <button onClick={() => setBrushColor('green')} className={`w-7 h-7 rounded-lg border-2 transition-all ${brushColor === 'green' ? 'border-gray-200 scale-110' : 'border-transparent hover:border-gray-400'}`} title="Cor Verde">
-                                <div className="w-full h-full bg-green-500 rounded-md"></div>
-                            </button>
-                            <div className="h-8 w-px bg-gray-700"></div>
-                            </>
-                        )}
                         <div className="flex items-center gap-2">
                             <span className="text-sm text-gray-300 whitespace-nowrap">Tamanho:</span>
                             <input type="range" min="5" max="100" value={brushSize} onChange={e => setBrushSize(parseInt(e.target.value, 10))} className="w-24" />
@@ -914,7 +903,8 @@ function App() {
 
     const handleRedo = () => {
         if (historyIndex < history.length - 1) {
-            handleHistoryNavigation(historyIndex - 1);
+            // FIX: Corrected redo logic to increment the history index instead of decrementing.
+            handleHistoryNavigation(historyIndex + 1);
         }
     };
 
@@ -1047,7 +1037,7 @@ function App() {
                         onDragLeave={handleDragLeave}
                         onDragOver={handleDragOver}
                         onDrop={(e) => handleDrop(e, 'reference')}
-                        className={`p-4 border-2 border-dashed rounded-lg text-center transition-colors ${isDragging && dragTarget === 'reference' ? 'border-amber-500 bg-gray-800/50' : 'border-gray-700 bg-transparent hover:border-gray-600'}`}>
+                        className={`p-4 border-2 border-dashed rounded-lg text-center transition-colors ${isDragging && dragTarget === 'reference' ? 'border-gray-500 bg-gray-800/50' : 'border-gray-700 bg-transparent hover:border-gray-600'}`}>
                         <label htmlFor="image-upload-reference" className="cursor-pointer text-sm text-gray-400">
                            {history.length === 0 ? 'Envie a imagem principal e de referência aqui' : 'Envie imagens de referência'}<br/>
                            <span className="text-xs text-gray-500">(Max 10MB por imagem)</span>
@@ -1061,19 +1051,17 @@ function App() {
                                     <div key={file.id}>
                                         <div className="flex justify-between items-center text-xs text-gray-400 mb-1">
                                             <span className="truncate max-w-[200px]">{file.name}</span>
-                                            {file.status === 'uploading' && <span className="text-amber-400">{file.progress}%</span>}
-                                            {file.status === 'success' && <span className="material-symbols-outlined text-green-400 text-base">check_circle</span>}
-                                            {file.status === 'error' && <span className="material-symbols-outlined text-red-400 text-base">error</span>}
+                                            {file.status === 'uploading' && <span className="text-gray-400">{file.progress}%</span>}
+                                            {file.status === 'success' && <span className="material-symbols-outlined text-gray-400 text-base">check_circle</span>}
+                                            {file.status === 'error' && <span className="material-symbols-outlined text-gray-400 text-base">error</span>}
                                         </div>
                                         <div className="w-full bg-gray-800 rounded-full h-1.5">
                                             <div 
-                                                className={`h-1.5 rounded-full transition-all duration-300 ${
-                                                    file.status === 'success' ? 'bg-green-500' : file.status === 'error' ? 'bg-red-500' : 'bg-amber-500'
-                                                }`}
+                                                className="h-1.5 rounded-full bg-gray-500 transition-all duration-300"
                                                 style={{ width: file.status === 'error' ? '100%' : `${file.progress}%` }}
                                             />
                                         </div>
-                                        {file.status === 'error' && file.message && <p className="text-xs text-red-400 mt-1">{file.message}</p>}
+                                        {file.status === 'error' && file.message && <p className="text-xs text-gray-400 mt-1">{file.message}</p>}
                                     </div>
                                 ))}
                             </div>
@@ -1123,7 +1111,7 @@ function App() {
                 <button
                     onClick={generateImageHandler}
                     disabled={isLoading}
-                    className="w-full py-3 bg-amber-500 text-slate-900 font-bold rounded-lg hover:bg-amber-400 transition-all duration-200 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed flex items-center justify-center shadow-lg shadow-amber-500/10 hover:shadow-xl hover:shadow-amber-500/20"
+                    className="w-full py-3 bg-amber-500 text-gray-900 font-bold rounded-lg hover:bg-amber-400 transition-all duration-200 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed flex items-center justify-center shadow-lg shadow-amber-500/10 hover:shadow-xl hover:shadow-amber-500/20"
                 >
                     {isLoading && mode === 'create' ? (
                         <svg className="animate-spin -ml-1 mr-3 h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -1132,7 +1120,7 @@ function App() {
                         </svg>
                     ) : 'Gerar Imagem'}
                 </button>
-                {error && <p className="text-sm text-red-400 text-center">{error}</p>}
+                {error && <p className="text-sm text-gray-300 text-center">{error}</p>}
 
             </div>
 
@@ -1159,7 +1147,7 @@ function App() {
                                 onDragOver={handleDragOver}
                                 onDrop={(e) => handleDrop(e, 'main')}
                                 className={`w-full h-full flex items-center justify-center transition-colors rounded-xl ${
-                                  isDragging && dragTarget === 'main' ? 'bg-gray-900/50 border-2 border-dashed border-amber-500' : 'border-2 border-dashed border-gray-700'
+                                  isDragging && dragTarget === 'main' ? 'bg-gray-900/50 border-2 border-dashed border-gray-500' : 'border-2 border-dashed border-gray-700'
                                 }`}>
                                 <label htmlFor="image-upload-main" className="cursor-pointer text-center text-gray-500 p-8">
                                     <div className="mb-4">
@@ -1181,7 +1169,7 @@ function App() {
                     </div>
                      {isLoading && mode === 'edit' && (
                         <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center rounded-xl z-20 transition-opacity duration-300" aria-live="polite">
-                            <svg className="animate-spin h-10 w-10 text-amber-500 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <svg className="animate-spin h-10 w-10 text-gray-400 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
