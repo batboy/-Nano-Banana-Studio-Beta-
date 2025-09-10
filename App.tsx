@@ -1,6 +1,5 @@
-
 import React, { useState, useCallback, ChangeEvent, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
-import type { Mode, CreateFunction, EditFunction, UploadedImage, HistoryEntry } from './types';
+import type { Mode, CreateFunction, EditFunction, UploadedImage, HistoryEntry, UploadProgress } from './types';
 import { generateImage, processImagesWithPrompt } from './services/geminiService';
 
 const Icons = {
@@ -23,11 +22,11 @@ const FunctionCard: React.FC<{
     data-function={dataFunction}
     onClick={() => onClick(dataFunction)}
     className={`function-card flex flex-col items-center justify-center p-2 border rounded-lg cursor-pointer transition-all duration-200 h-20 ${
-      isActive ? 'border-slate-500 bg-slate-700 scale-105' : 'border-slate-700 bg-slate-800 hover:bg-slate-700'
+      isActive ? 'border-gray-500 bg-gray-800 scale-105' : 'border-gray-700 bg-gray-900 hover:bg-gray-800'
     }`}
   >
-    <div className="text-slate-300 mb-1">{icon}</div>
-    <div className="text-xs font-semibold text-center text-slate-300">{name}</div>
+    <div className="text-gray-300 mb-1">{icon}</div>
+    <div className="text-xs font-semibold text-center text-gray-300">{name}</div>
   </div>
 );
 
@@ -549,7 +548,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
             
             {showMiniMap && (
                 <div 
-                    className="absolute top-4 right-4 bg-slate-800/70 backdrop-blur-sm rounded-lg shadow-lg ring-1 ring-white/10 overflow-hidden"
+                    className="absolute top-4 right-4 bg-gray-900/70 backdrop-blur-sm rounded-lg shadow-lg ring-1 ring-white/10 overflow-hidden"
                     onMouseLeave={handleMiniMapMouseUp}
                 >
                     <canvas
@@ -565,42 +564,42 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
 
             <div className="absolute bottom-4 inset-x-0 flex items-stretch justify-center gap-4">
                 {canDraw && (
-                    <div className="bg-slate-800/90 backdrop-blur-sm p-2 rounded-xl flex items-center gap-3 shadow-lg ring-1 ring-white/5">
-                        <div className="flex bg-slate-900/70 p-1 rounded-md">
-                            <button onClick={() => setMaskTool('brush')} title="Pincel" className={`p-2 rounded transition-colors ${maskTool === 'brush' ? 'bg-slate-600' : 'hover:bg-slate-700'}`}>
+                    <div className="bg-gray-900/90 backdrop-blur-sm p-2 rounded-xl flex items-center gap-3 shadow-lg ring-1 ring-white/10">
+                        <div className="flex bg-gray-950/70 p-1 rounded-md">
+                            <button onClick={() => setMaskTool('brush')} title="Pincel" className={`p-2 rounded transition-colors ${maskTool === 'brush' ? 'bg-gray-700' : 'hover:bg-gray-800'}`}>
                                 <span className="material-symbols-outlined text-xl">brush</span>
                             </button>
-                            <button onClick={() => setMaskTool('eraser')} title="Borracha" className={`p-2 rounded transition-colors ${maskTool === 'eraser' ? 'bg-slate-600' : 'hover:bg-slate-700'}`}>
+                            <button onClick={() => setMaskTool('eraser')} title="Borracha" className={`p-2 rounded transition-colors ${maskTool === 'eraser' ? 'bg-gray-700' : 'hover:bg-gray-800'}`}>
                                 <span className="material-symbols-outlined text-xl">ink_eraser</span>
                             </button>
-                            <button onClick={clearMask} className="p-2 rounded hover:bg-slate-700 transition-colors" title="Limpar Seleção">
+                            <button onClick={clearMask} className="p-2 rounded hover:bg-gray-800 transition-colors" title="Limpar Seleção">
                             <span className="material-symbols-outlined text-xl text-red-400 hover:text-red-300">deselect</span>
                             </button>
                         </div>
-                        <div className="h-8 w-px bg-slate-700"></div>
+                        <div className="h-8 w-px bg-gray-700"></div>
                         {maskTool === 'brush' && (
                             <>
-                            <button onClick={() => setBrushColor('red')} className={`w-7 h-7 rounded-lg border-2 transition-all ${brushColor === 'red' ? 'border-slate-200 scale-110' : 'border-transparent hover:border-slate-400'}`} title="Cor Vermelha">
+                            <button onClick={() => setBrushColor('red')} className={`w-7 h-7 rounded-lg border-2 transition-all ${brushColor === 'red' ? 'border-gray-200 scale-110' : 'border-transparent hover:border-gray-400'}`} title="Cor Vermelha">
                                 <div className="w-full h-full bg-red-500 rounded-md"></div>
                             </button>
-                            <button onClick={() => setBrushColor('green')} className={`w-7 h-7 rounded-lg border-2 transition-all ${brushColor === 'green' ? 'border-slate-200 scale-110' : 'border-transparent hover:border-slate-400'}`} title="Cor Verde">
+                            <button onClick={() => setBrushColor('green')} className={`w-7 h-7 rounded-lg border-2 transition-all ${brushColor === 'green' ? 'border-gray-200 scale-110' : 'border-transparent hover:border-gray-400'}`} title="Cor Verde">
                                 <div className="w-full h-full bg-green-500 rounded-md"></div>
                             </button>
-                            <div className="h-8 w-px bg-slate-700"></div>
+                            <div className="h-8 w-px bg-gray-700"></div>
                             </>
                         )}
                         <div className="flex items-center gap-2">
-                            <span className="text-sm text-slate-300 whitespace-nowrap">Tamanho:</span>
+                            <span className="text-sm text-gray-300 whitespace-nowrap">Tamanho:</span>
                             <input type="range" min="5" max="100" value={brushSize} onChange={e => setBrushSize(parseInt(e.target.value, 10))} className="w-24" />
                         </div>
                         <div className="flex items-center gap-2">
-                            <span className="text-sm text-slate-300">Opacidade:</span>
+                            <span className="text-sm text-gray-300">Opacidade:</span>
                             <input type="range" min="0.1" max="1" step="0.05" value={maskOpacity} onChange={e => setMaskOpacity(parseFloat(e.target.value))} className="w-24" />
                         </div>
                     </div>
                 )}
-                <div className="bg-slate-800/90 backdrop-blur-sm p-2 rounded-xl flex items-center gap-2 shadow-lg ring-1 ring-white/5">
-                    <button onClick={() => handleZoomSliderChange(transform.scale * 100 / 1.2)} title="Diminuir Zoom" className="p-2 rounded hover:bg-slate-700 transition-colors">
+                <div className="bg-gray-900/90 backdrop-blur-sm p-2 rounded-xl flex items-center gap-2 shadow-lg ring-1 ring-white/10">
+                    <button onClick={() => handleZoomSliderChange(transform.scale * 100 / 1.2)} title="Diminuir Zoom" className="p-2 rounded hover:bg-gray-800 transition-colors">
                         <span className="material-symbols-outlined text-xl">zoom_out</span>
                     </button>
                     <div className="flex items-center gap-2 w-32">
@@ -611,18 +610,18 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
                             step="1"
                             value={transform.scale * 100}
                             onChange={e => handleZoomSliderChange(parseInt(e.target.value, 10))}
-                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                             aria-label="Zoom slider"
                         />
                     </div>
-                    <button onClick={() => handleZoomSliderChange(transform.scale * 100 * 1.2)} title="Aumentar Zoom" className="p-2 rounded hover:bg-slate-700 transition-colors">
+                    <button onClick={() => handleZoomSliderChange(transform.scale * 100 * 1.2)} title="Aumentar Zoom" className="p-2 rounded hover:bg-gray-800 transition-colors">
                         <span className="material-symbols-outlined text-xl">zoom_in</span>
                     </button>
-                    <button onClick={() => handleZoomSliderChange(100)} className="text-sm font-semibold px-2 hover:bg-slate-700 rounded transition-colors min-w-[50px] text-center" title="Resetar Zoom (100%)">
+                    <button onClick={() => handleZoomSliderChange(100)} className="text-sm font-semibold px-2 hover:bg-gray-800 rounded transition-colors min-w-[50px] text-center" title="Resetar Zoom (100%)">
                         {Math.round(transform.scale * 100)}%
                     </button>
-                    <div className="h-8 w-px bg-slate-700"></div>
-                    <button onClick={zoomToFit} title="Ajustar à Tela" className="p-2 rounded hover:bg-slate-700 transition-colors">
+                    <div className="h-8 w-px bg-gray-700"></div>
+                    <button onClick={zoomToFit} title="Ajustar à Tela" className="p-2 rounded hover:bg-gray-800 transition-colors">
                         <span className="material-symbols-outlined text-xl">fit_screen</span>
                     </button>
                 </div>
@@ -653,6 +652,8 @@ function App() {
     const editorRef = useRef<ImageEditorRef>(null);
 
     const [isDragging, setIsDragging] = useState<boolean>(false);
+    const [dragTarget, setDragTarget] = useState<'main' | 'reference' | null>(null);
+    const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([]);
 
     const resetImages = () => {
         setImages([]);
@@ -714,68 +715,81 @@ function App() {
         setActiveEditFunction(func);
     };
 
-    const handleImageUpload = useCallback(async (files: FileList | null) => {
-        if (!files || files.length === 0) return;
-    
-        const isFirstUploadInEditMode = mode === 'edit' && history.length === 0;
-    
-        const filePromises = Array.from(files).map(file => {
+    const handleImageUpload = useCallback((files: FileList | null, target: 'main' | 'reference') => {
+        if (!files || files.length === 0 || mode !== 'edit') return;
+
+        let isMainImageSlotFilled = history.length > 0;
+        const filesToProcess = Array.from(files);
+
+        // If the target is the main canvas, only process the first file.
+        if (target === 'main' && filesToProcess.length > 1) {
+            filesToProcess.splice(1);
+        }
+
+        filesToProcess.forEach((file, index) => {
+            const id = `upload-${file.name}-${Date.now()}-${Math.random()}`;
+            const isMainImageTarget = (target === 'main') || (target === 'reference' && !isMainImageSlotFilled && index === 0);
+
             if (file.size > 10 * 1024 * 1024) {
-                setError(`A imagem "${file.name}" excede o limite de 10MB.`);
-                return Promise.reject(new Error("File size exceeded"));
+                setUploadProgress(prev => [...prev, { id, name: file.name, progress: 100, status: 'error', message: 'Excede o limite de 10MB.' }]);
+                setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
+                return;
             }
             if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-                setError(`A imagem "${file.name}" tem um tipo de arquivo inválido. Use PNG, JPG, ou WebP.`);
-                return Promise.reject(new Error("Invalid file type"));
+                setUploadProgress(prev => [...prev, { id, name: file.name, progress: 100, status: 'error', message: 'Tipo de arquivo inválido.' }]);
+                setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
+                return;
             }
-    
-            return new Promise<{ uploaded: UploadedImage; dataUrl: string }>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => {
-                    const dataUrl = reader.result as string;
-                    const base64 = dataUrl.split(',')[1];
-                    resolve({ uploaded: { base64, mimeType: file.type }, dataUrl });
-                };
-                reader.onerror = error => reject(error);
-                reader.readAsDataURL(file);
-            });
+            
+            setUploadProgress(prev => [...prev, { id, name: file.name, progress: 0, status: 'uploading' }]);
+            
+            const reader = new FileReader();
+
+            reader.onprogress = (event) => {
+                if (event.lengthComputable) {
+                    const progress = Math.round((event.loaded / event.total) * 100);
+                    setUploadProgress(p => p.map(item => item.id === id ? { ...item, progress } : item));
+                }
+            };
+
+            reader.onerror = () => {
+                setUploadProgress(p => p.map(item => item.id === id ? { ...item, status: 'error', message: 'Falha ao ler o arquivo.' } : item));
+                setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
+            };
+
+            reader.onload = () => {
+                setUploadProgress(p => p.map(item => item.id === id ? { ...item, status: 'success', progress: 100 } : item));
+                
+                const dataUrl = reader.result as string;
+                const uploadedImage: UploadedImage = { base64: dataUrl.split(',')[1], mimeType: file.type };
+                
+                if (isMainImageTarget) {
+                    const initialEntry: HistoryEntry = {
+                        id: `hist-${Date.now()}`,
+                        imageUrl: dataUrl,
+                        prompt: '',
+                        mode: 'edit',
+                        editFunction: activeEditFunction,
+                        referenceImages: [],
+                        referenceImagePreviews: [],
+                        styleIntensity: styleIntensity,
+                    };
+                    setHistory([initialEntry]);
+                    setHistoryIndex(0);
+                    setImages([]);
+                    setImagePreviews([]);
+                    isMainImageSlotFilled = true;
+                } else {
+                    setImages(prev => [...prev, uploadedImage]);
+                    setImagePreviews(prev => [...prev, dataUrl]);
+                }
+
+                setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 1500);
+            };
+            
+            reader.readAsDataURL(file);
         });
-    
-        try {
-            const results = await Promise.allSettled(filePromises);
-            const validFiles = results
-                .filter(result => result.status === 'fulfilled')
-                .map(result => (result as PromiseFulfilledResult<any>).value);
-    
-            if (validFiles.length === 0) return;
-    
-            if (isFirstUploadInEditMode) {
-                const mainImageFile = validFiles.shift()!;
-                const initialEntry: HistoryEntry = {
-                    id: `hist-${Date.now()}`,
-                    imageUrl: mainImageFile.dataUrl,
-                    prompt: '',
-                    mode: 'edit',
-                    editFunction: activeEditFunction,
-                    referenceImages: [],
-                    referenceImagePreviews: [],
-                    styleIntensity: styleIntensity,
-                };
-                setHistory([initialEntry]);
-                setHistoryIndex(0);
-    
-                setImages(validFiles.map(f => f.uploaded));
-                setImagePreviews(validFiles.map(f => f.dataUrl));
-            } else {
-                setImages(prev => [...prev, ...validFiles.map(f => f.uploaded)]);
-                setImagePreviews(prev => [...prev, ...validFiles.map(f => f.dataUrl)]);
-            }
-            setError(null);
-        } catch (e) {
-             console.error("Error processing images:", e);
-             setError("Ocorreu um erro ao processar as imagens.");
-        }
-    }, [mode, history, activeEditFunction, styleIntensity]);
+    }, [mode, history.length, activeEditFunction, styleIntensity]);
 
 
     const handleRemoveImage = (indexToRemove: number) => {
@@ -783,18 +797,20 @@ function App() {
         setImagePreviews(prev => prev.filter((_, index) => index !== indexToRemove));
     };
     
-    const imageUploadHandler = (e: ChangeEvent<HTMLInputElement>) => handleImageUpload(e.target.files);
-
-    const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+    const handleDragEnter = (e: React.DragEvent<HTMLDivElement>, target: 'main' | 'reference') => {
         e.preventDefault();
         e.stopPropagation();
-        setIsDragging(true);
+        if (mode === 'edit') {
+            setIsDragging(true);
+            setDragTarget(target);
+        }
     };
 
     const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
         e.preventDefault();
         e.stopPropagation();
         setIsDragging(false);
+        setDragTarget(null);
     };
     
     const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
@@ -802,13 +818,16 @@ function App() {
         e.stopPropagation();
     };
 
-    const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    const handleDrop = (e: React.DragEvent<HTMLDivElement>, target: 'main' | 'reference') => {
         e.preventDefault();
         e.stopPropagation();
         setIsDragging(false);
-        const files = e.dataTransfer.files;
-        if (files && files.length > 0) {
-            handleImageUpload(files);
+        setDragTarget(null);
+        if (mode === 'edit') {
+            const files = e.dataTransfer.files;
+            if (files && files.length > 0) {
+                handleImageUpload(files, target);
+            }
         }
     };
 
@@ -895,7 +914,7 @@ function App() {
 
     const handleRedo = () => {
         if (historyIndex < history.length - 1) {
-            handleHistoryNavigation(historyIndex + 1);
+            handleHistoryNavigation(historyIndex - 1);
         }
     };
 
@@ -942,27 +961,27 @@ function App() {
         <div className="flex h-screen font-sans">
             {showMobileModal && (
                 <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-                    <div className="bg-slate-800 p-8 rounded-lg text-center max-w-sm">
+                    <div className="bg-gray-900 p-8 rounded-lg text-center max-w-sm">
                         <h2 className="text-2xl font-bold mb-4">Experiência Otimizada para Desktop</h2>
                         <p>Para aproveitar todos os recursos do 🍌 Nano Banana Studio (beta), por favor, acesse em um computador ou tablet com tela maior.</p>
                     </div>
                 </div>
             )}
             {/* Left Panel */}
-            <div className="w-[380px] bg-slate-800 p-6 flex flex-col space-y-6 overflow-y-auto">
+            <div className="w-[380px] bg-gray-900 p-6 flex flex-col space-y-6 overflow-y-auto">
                 <div className="flex items-center space-x-3">
-                    <h1 className="text-xl font-bold text-slate-100">🍌 Nano Banana Studio</h1>
-                    <span className="bg-slate-700 text-slate-300 text-xs font-semibold px-2.5 py-0.5 rounded-full">Beta</span>
+                    <h1 className="text-xl font-bold text-gray-100">🍌 Nano Banana Studio</h1>
+                    <span className="bg-gray-800 text-gray-300 text-xs font-semibold px-2.5 py-0.5 rounded-full">Beta</span>
                 </div>
 
                 <div className="flex space-x-2">
-                    <button onClick={() => handleModeToggle('create')} className={`w-1/2 py-2 text-sm font-semibold rounded-lg ${mode === 'create' ? 'bg-slate-600 text-slate-100' : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'} transition-all`}>Criação</button>
-                    <button onClick={() => handleModeToggle('edit')} className={`w-1/2 py-2 text-sm font-semibold rounded-lg ${mode === 'edit' ? 'bg-slate-600 text-slate-100' : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'} transition-all`}>Edição</button>
+                    <button onClick={() => handleModeToggle('create')} className={`w-1/2 py-2 text-sm font-semibold rounded-lg ${mode === 'create' ? 'bg-gray-700 text-gray-100' : 'bg-gray-800/50 text-gray-400 hover:bg-gray-800'} transition-all`}>Criação</button>
+                    <button onClick={() => handleModeToggle('edit')} className={`w-1/2 py-2 text-sm font-semibold rounded-lg ${mode === 'edit' ? 'bg-gray-700 text-gray-100' : 'bg-gray-800/50 text-gray-400 hover:bg-gray-800'} transition-all`}>Edição</button>
                 </div>
                 
                 {mode === 'create' && (
                   <>
-                    <h2 className="text-md font-semibold text-slate-400 pt-2 flex items-center gap-2"><span className="material-symbols-outlined text-xl">auto_awesome</span> Função Criativa</h2>
+                    <h2 className="text-md font-semibold text-gray-400 pt-2 flex items-center gap-2"><span className="material-symbols-outlined text-xl">auto_awesome</span> Função Criativa</h2>
                     <div className="grid grid-cols-2 gap-3">
                         <FunctionCard data-function="free" isActive={activeCreateFunction === 'free'} onClick={handleCreateFunctionClick} icon={<Icons.Freeform />} name="Livre" />
                         <FunctionCard data-function="sticker" isActive={activeCreateFunction === 'sticker'} onClick={handleCreateFunctionClick} icon={<span className="material-symbols-outlined text-2xl">sticky_note_2</span>} name="Adesivo" />
@@ -970,10 +989,10 @@ function App() {
                         <FunctionCard data-function="comic" isActive={activeCreateFunction === 'comic'} onClick={handleCreateFunctionClick} icon={<span className="material-symbols-outlined text-2xl">view_quilt</span>} name="Quadrinho" />
                     </div>
 
-                    <h2 className="text-md font-semibold text-slate-400 pt-2 flex items-center gap-2"><span className="material-symbols-outlined text-xl">aspect_ratio</span> Proporção</h2>
+                    <h2 className="text-md font-semibold text-gray-400 pt-2 flex items-center gap-2"><span className="material-symbols-outlined text-xl">aspect_ratio</span> Proporção</h2>
                     <div className="grid grid-cols-5 gap-3">
                       {['1:1', '16:9', '9:16', '4:3', '3:4'].map(ratio => (
-                        <button key={ratio} onClick={() => handleAspectRatioChange(ratio)} className={`py-2 text-sm font-semibold rounded-lg transition-colors ${aspectRatio === ratio ? 'bg-slate-600' : 'bg-slate-700 hover:bg-slate-600'}`}>{ratio}</button>
+                        <button key={ratio} onClick={() => handleAspectRatioChange(ratio)} className={`py-2 text-sm font-semibold rounded-lg transition-colors ${aspectRatio === ratio ? 'bg-gray-700' : 'bg-gray-800 hover:bg-gray-700'}`}>{ratio}</button>
                       ))}
                     </div>
                   </>
@@ -981,7 +1000,7 @@ function App() {
 
                 {mode === 'edit' && (
                    <>
-                    <h2 className="text-md font-semibold text-slate-400 pt-2 flex items-center gap-2"><span className="material-symbols-outlined text-xl">tune</span> Ferramentas de Edição</h2>
+                    <h2 className="text-md font-semibold text-gray-400 pt-2 flex items-center gap-2"><span className="material-symbols-outlined text-xl">tune</span> Ferramentas de Edição</h2>
                     <div className="grid grid-cols-3 gap-3">
                         <FunctionCard data-function="add-remove" isActive={activeEditFunction === 'add-remove'} onClick={handleEditFunctionClick} icon={<span className="material-symbols-outlined text-2xl">auto_fix_high</span>} name="Pincel Mágico" />
                         <FunctionCard data-function="style" isActive={activeEditFunction === 'style'} onClick={handleEditFunctionClick} icon={<span className="material-symbols-outlined text-2xl">palette</span>} name="Estilo" />
@@ -989,7 +1008,7 @@ function App() {
                     </div>
                     {activeEditFunction === 'style' && (
                         <div className="space-y-3 pt-4">
-                            <h3 className="text-md font-semibold text-slate-400 flex items-center gap-2">
+                            <h3 className="text-md font-semibold text-gray-400 flex items-center gap-2">
                                 <span className="material-symbols-outlined text-xl">contrast</span> Intensidade do Estilo
                             </h3>
                             <div className="flex items-center gap-4 px-1">
@@ -999,10 +1018,10 @@ function App() {
                                     step="1" 
                                     value={styleIntensity} 
                                     onChange={e => setStyleIntensity(parseInt(e.target.value, 10))} 
-                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                                     aria-label="Intensidade do Estilo"
                                 />
-                                <span className="text-sm font-medium text-slate-300 w-24 text-center">
+                                <span className="text-sm font-medium text-gray-300 w-24 text-center">
                                     {['Sutil', 'Leve', 'Médio', 'Forte', 'Intenso'][styleIntensity - 1]}
                                 </span>
                             </div>
@@ -1012,29 +1031,54 @@ function App() {
                 )}
 
                 <div className="flex-grow flex flex-col space-y-4 pt-2">
-                    <h2 className="text-md font-semibold text-slate-400 flex items-center gap-2"><span className="material-symbols-outlined text-xl">subject</span> Instruções</h2>
+                    <h2 className="text-md font-semibold text-gray-400 flex items-center gap-2"><span className="material-symbols-outlined text-xl">subject</span> Instruções</h2>
                     <textarea
                         value={prompt}
                         onChange={(e) => setPrompt(e.target.value)}
                         placeholder={mode === 'create' ? "Ex: Um astronauta surfando..." : "Ex: Adicione óculos de sol no gato..."}
-                        className="w-full h-32 p-3 bg-slate-700 rounded-lg text-slate-200 placeholder-slate-400 border border-slate-600 focus:ring-2 focus:ring-amber-500 focus:outline-none transition"
+                        className="w-full h-32 p-3 bg-gray-800 rounded-lg text-gray-200 placeholder-gray-500 border border-gray-700 focus:ring-2 focus:ring-amber-500 focus:outline-none transition"
                     />
                   
                   {mode === 'edit' && (
                     <div className="space-y-3">
-                        <h3 className="text-md font-semibold text-slate-400 flex items-center gap-2"><span className="material-symbols-outlined text-xl">photo_library</span> Imagens de Referência</h3>
+                        <h3 className="text-md font-semibold text-gray-400 flex items-center gap-2"><span className="material-symbols-outlined text-xl">photo_library</span> Imagens de Referência</h3>
                        <div 
-                        onDragEnter={handleDragEnter}
+                        onDragEnter={(e) => handleDragEnter(e, 'reference')}
                         onDragLeave={handleDragLeave}
                         onDragOver={handleDragOver}
-                        onDrop={handleDrop}
-                        className={`p-4 border-2 border-dashed rounded-lg text-center transition-colors ${isDragging ? 'border-amber-500 bg-slate-700/50' : 'border-slate-600 bg-transparent hover:border-slate-500'}`}>
-                        <label htmlFor="image-upload" className="cursor-pointer text-sm text-slate-400">
-                           {history.length === 0 ? 'Envie a imagem principal aqui' : 'Envie imagens de referência'}<br/>
-                           <span className="text-xs text-slate-500">(Max 10MB por imagem)</span>
+                        onDrop={(e) => handleDrop(e, 'reference')}
+                        className={`p-4 border-2 border-dashed rounded-lg text-center transition-colors ${isDragging && dragTarget === 'reference' ? 'border-amber-500 bg-gray-800/50' : 'border-gray-700 bg-transparent hover:border-gray-600'}`}>
+                        <label htmlFor="image-upload-reference" className="cursor-pointer text-sm text-gray-400">
+                           {history.length === 0 ? 'Envie a imagem principal e de referência aqui' : 'Envie imagens de referência'}<br/>
+                           <span className="text-xs text-gray-500">(Max 10MB por imagem)</span>
                         </label>
-                        <input id="image-upload" type="file" multiple accept="image/*" onChange={imageUploadHandler} className="hidden" />
+                        <input id="image-upload-reference" type="file" multiple accept="image/*" onChange={(e) => handleImageUpload(e.target.files, 'reference')} className="hidden" />
                       </div>
+                      {uploadProgress.length > 0 && (
+                        <div className="space-y-3 pt-2">
+                            <div className="space-y-2">
+                                {uploadProgress.map(file => (
+                                    <div key={file.id}>
+                                        <div className="flex justify-between items-center text-xs text-gray-400 mb-1">
+                                            <span className="truncate max-w-[200px]">{file.name}</span>
+                                            {file.status === 'uploading' && <span className="text-amber-400">{file.progress}%</span>}
+                                            {file.status === 'success' && <span className="material-symbols-outlined text-green-400 text-base">check_circle</span>}
+                                            {file.status === 'error' && <span className="material-symbols-outlined text-red-400 text-base">error</span>}
+                                        </div>
+                                        <div className="w-full bg-gray-800 rounded-full h-1.5">
+                                            <div 
+                                                className={`h-1.5 rounded-full transition-all duration-300 ${
+                                                    file.status === 'success' ? 'bg-green-500' : file.status === 'error' ? 'bg-red-500' : 'bg-amber-500'
+                                                }`}
+                                                style={{ width: file.status === 'error' ? '100%' : `${file.progress}%` }}
+                                            />
+                                        </div>
+                                        {file.status === 'error' && file.message && <p className="text-xs text-red-400 mt-1">{file.message}</p>}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                      )}
                       <div className="grid grid-cols-5 gap-2">
                         {imagePreviews.map((src, index) => (
                           <div key={index} className="relative group aspect-square">
@@ -1050,7 +1094,7 @@ function App() {
 
                     {history.length > 0 && (
                         <div className="space-y-3 pt-2">
-                            <h3 className="text-md font-semibold text-slate-400 flex items-center gap-2"><span className="material-symbols-outlined text-xl">history</span> Histórico</h3>
+                            <h3 className="text-md font-semibold text-gray-400 flex items-center gap-2"><span className="material-symbols-outlined text-xl">history</span> Histórico</h3>
                             <div className="h-36 overflow-y-auto space-y-2 pr-2">
                                 {[...history].reverse().map((entry, revIndex) => {
                                     const originalIndex = history.length - 1 - revIndex;
@@ -1059,13 +1103,13 @@ function App() {
                                             key={entry.id} 
                                             onClick={() => handleHistoryNavigation(originalIndex)}
                                             className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all ${
-                                                originalIndex === historyIndex ? 'bg-slate-600' : 'bg-slate-700 hover:bg-slate-600/70'
+                                                originalIndex === historyIndex ? 'bg-gray-700' : 'bg-gray-800 hover:bg-gray-700/70'
                                             }`}
                                         >
                                             <img src={entry.imageUrl} alt="History thumbnail" className="w-12 h-12 object-cover rounded-md flex-shrink-0" />
                                             <div className="flex-1 text-sm overflow-hidden">
-                                                <p className="font-semibold text-slate-200">{getHistoryEntryTitle(entry)}</p>
-                                                <p className="text-slate-400 truncate">{entry.prompt || (entry.mode === 'edit' ? 'Imagem base' : 'Sem prompt')}</p>
+                                                <p className="font-semibold text-gray-200">{getHistoryEntryTitle(entry)}</p>
+                                                <p className="text-gray-400 truncate">{entry.prompt || (entry.mode === 'edit' ? 'Imagem base' : 'Sem prompt')}</p>
                                             </div>
                                         </div>
                                     )
@@ -1079,7 +1123,7 @@ function App() {
                 <button
                     onClick={generateImageHandler}
                     disabled={isLoading}
-                    className="w-full py-3 bg-amber-500 text-slate-900 font-bold rounded-lg hover:bg-amber-400 transition-all duration-200 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed flex items-center justify-center shadow-lg shadow-amber-500/10 hover:shadow-xl hover:shadow-amber-500/20"
+                    className="w-full py-3 bg-amber-500 text-slate-900 font-bold rounded-lg hover:bg-amber-400 transition-all duration-200 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed flex items-center justify-center shadow-lg shadow-amber-500/10 hover:shadow-xl hover:shadow-amber-500/20"
                 >
                     {isLoading && mode === 'create' ? (
                         <svg className="animate-spin -ml-1 mr-3 h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -1093,15 +1137,15 @@ function App() {
             </div>
 
             {/* Right Panel */}
-            <div className="flex-1 bg-slate-900 flex flex-col items-center justify-center p-8 relative">
+            <div className="flex-1 bg-black flex flex-col items-center justify-center p-8 relative">
                 <div className="absolute top-10 left-10 flex items-center gap-2 z-10">
-                    <button onClick={handleSaveImage} disabled={!generatedImage} className="bg-slate-800 px-3 py-2 text-sm font-semibold rounded-lg hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"><Icons.Save /> Salvar</button>
-                    <button onClick={handleUndo} disabled={isUndoDisabled} className="bg-slate-800 px-3 py-2 text-sm font-semibold rounded-lg hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"><Icons.Undo /> Desfazer</button>
-                    <button onClick={handleRedo} disabled={isRedoDisabled} className="bg-slate-800 px-3 py-2 text-sm font-semibold rounded-lg hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"><Icons.Redo /> Refazer</button>
+                    <button onClick={handleSaveImage} disabled={!generatedImage} className="bg-gray-900 px-3 py-2 text-sm font-semibold rounded-lg hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"><Icons.Save /> Salvar</button>
+                    <button onClick={handleUndo} disabled={isUndoDisabled} className="bg-gray-900 px-3 py-2 text-sm font-semibold rounded-lg hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"><Icons.Undo /> Desfazer</button>
+                    <button onClick={handleRedo} disabled={isRedoDisabled} className="bg-gray-900 px-3 py-2 text-sm font-semibold rounded-lg hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"><Icons.Redo /> Refazer</button>
                 </div>
 
                 <div className="relative w-full h-full">
-                    <div className="w-full h-full border-2 border-dashed border-slate-700 rounded-xl flex items-center justify-center overflow-hidden">
+                    <div className="w-full h-full flex items-center justify-center overflow-hidden">
                         {generatedImage ? (
                             <ImageEditor 
                               ref={editorRef} 
@@ -1109,36 +1153,40 @@ function App() {
                               activeEditFunction={activeEditFunction}
                             />
                         ) : (
-                            <div 
-                                onDragEnter={handleDragEnter}
+                             <div 
+                                onDragEnter={(e) => handleDragEnter(e, 'main')}
                                 onDragLeave={handleDragLeave}
                                 onDragOver={handleDragOver}
-                                onDrop={handleDrop}
-                                className={`w-full h-full flex items-center justify-center transition-colors ${isDragging ? 'bg-slate-800/50' : ''}`}>
-                                <label htmlFor="image-upload-main" className="cursor-pointer text-center text-slate-500">
+                                onDrop={(e) => handleDrop(e, 'main')}
+                                className={`w-full h-full flex items-center justify-center transition-colors rounded-xl ${
+                                  isDragging && dragTarget === 'main' ? 'bg-gray-900/50 border-2 border-dashed border-amber-500' : 'border-2 border-dashed border-gray-700'
+                                }`}>
+                                <label htmlFor="image-upload-main" className="cursor-pointer text-center text-gray-500 p-8">
                                     <div className="mb-4">
-                                       <span className="material-symbols-outlined text-slate-600" style={{ fontSize: 64 }}>add_photo_alternate</span>
+                                       <span className="material-symbols-outlined text-gray-600" style={{ fontSize: 64 }}>add_photo_alternate</span>
                                     </div>
-                                    <h2 className="text-2xl font-semibold text-slate-300">Sua Arte Começa Aqui</h2>
-                                    <p className="max-w-xs mt-2 text-slate-400">
+                                    <h2 className="text-2xl font-semibold text-gray-300">
+                                      {mode === 'create' ? 'Sua Arte Começa Aqui' : 'Sua Imagem Principal'}
+                                    </h2>
+                                    <p className="max-w-xs mt-2 text-gray-400">
                                         {mode === 'create' 
                                             ? 'Use o painel à esquerda para descrever sua visão e dar vida às suas ideias.'
                                             : 'Arraste e solte uma imagem aqui ou use o painel à esquerda para começar a editar.'
                                         }
                                     </p>
-                                    <input id="image-upload-main" type="file" multiple accept="image/*" onChange={imageUploadHandler} className="hidden" />
+                                    <input id="image-upload-main" type="file" accept="image/*" onChange={(e) => mode === 'edit' && handleImageUpload(e.target.files, 'main')} className="hidden" />
                                  </label>
                             </div>
                         )}
                     </div>
                      {isLoading && mode === 'edit' && (
-                        <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm flex flex-col items-center justify-center rounded-xl z-20 transition-opacity duration-300" aria-live="polite">
+                        <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center rounded-xl z-20 transition-opacity duration-300" aria-live="polite">
                             <svg className="animate-spin h-10 w-10 text-amber-500 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            <p className="text-slate-300 font-semibold text-lg">Aplicando magia na sua imagem...</p>
-                            <p className="text-slate-400 text-sm mt-1">Isso pode levar alguns instantes.</p>
+                            <p className="text-gray-300 font-semibold text-lg">Aplicando magia na sua imagem...</p>
+                            <p className="text-gray-400 text-sm mt-1">Isso pode levar alguns instantes.</p>
                         </div>
                     )}
                 </div>

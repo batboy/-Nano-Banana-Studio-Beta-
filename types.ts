@@ -26,3 +26,11 @@ export interface HistoryEntry {
   referenceImagePreviews?: string[];
   styleIntensity?: number;
 }
+
+export interface UploadProgress {
+  id: string;
+  name: string;
+  progress: number;
+  status: 'uploading' | 'success' | 'error';
+  message?: string;
+}
