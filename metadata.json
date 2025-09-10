@@ -1,0 +1,5 @@
+{
+  "name": "🍌 Nano Banana Studio (Beta)",
+  "description": "A professional-grade application for generating and editing images using AI. Users can create images from text prompts, generate stickers, logos, and comic-style art. It also supports advanced editing features like adding or removing objects, retouching, style transfer, and composing multiple images.",
+  "requestFramePermissions": []
+}
