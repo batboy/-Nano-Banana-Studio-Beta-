@@ -38,21 +38,29 @@ export const generateImage = async (prompt: string, createFunction: string, aspe
             break;
     }
 
-    const response = await ai.models.generateImages({
-        model: 'imagen-4.0-generate-001',
-        prompt: finalPrompt,
-        config: {
-            numberOfImages: 1,
-            outputMimeType: 'image/png',
-            aspectRatio: aspectRatio,
-        },
-    });
+    let response;
+    try {
+        response = await ai.models.generateImages({
+            model: 'imagen-4.0-generate-001',
+            prompt: finalPrompt,
+            config: {
+                numberOfImages: 1,
+                outputMimeType: 'image/png',
+                aspectRatio: aspectRatio,
+            },
+        });
+    } catch (e: any) {
+        console.error("Gemini API Error (generateImage):", e);
+        throw new Error("Ocorreu um erro na comunicação com a API. Verifique sua conexão e tente novamente.");
+    }
+
 
     if (response.generatedImages && response.generatedImages.length > 0) {
         const base64ImageBytes: string = response.generatedImages[0].image.imageBytes;
         return `data:image/png;base64,${base64ImageBytes}`;
     }
-    throw new Error("Image generation failed or returned no images.");
+    
+    throw new Error("A geração da imagem falhou. Isso pode ser devido a uma restrição de segurança no seu prompt. Tente reformular sua solicitação.");
 };
 
 
@@ -156,20 +164,42 @@ ${contextInstructions}
 
     parts.push({ text: finalPrompt });
 
-    const response: GenerateContentResponse = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image-preview',
-        contents: { parts: parts },
-        config: {
-            responseModalities: [Modality.IMAGE, Modality.TEXT],
-        },
-    });
+    let response: GenerateContentResponse;
+    try {
+        response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image-preview',
+            contents: { parts: parts },
+            config: {
+                responseModalities: [Modality.IMAGE, Modality.TEXT],
+            },
+        });
+    } catch(e: any) {
+        console.error("Gemini API Error (processImagesWithPrompt):", e);
+        throw new Error("Ocorreu um erro na comunicação com a API. Verifique sua conexão e tente novamente.");
+    }
     
-    for (const part of response.candidates[0].content.parts) {
+    const candidate = response.candidates?.[0];
+
+    if (!candidate) {
+        const blockReason = response.promptFeedback?.blockReason;
+        if (blockReason) {
+            return `A edição foi bloqueada por motivos de segurança (${blockReason}). Por favor, ajuste o prompt ou as imagens.`;
+        }
+        throw new Error("A edição falhou pois o modelo não retornou uma resposta. Sua imagem ou prompt pode ter sido bloqueado.");
+    }
+
+    if (candidate.finishReason && candidate.finishReason !== 'STOP') {
+        if (candidate.finishReason === 'SAFETY') {
+            throw new Error("A edição foi bloqueada por motivos de segurança. Por favor, ajuste o prompt ou as imagens e tente novamente.");
+        }
+        throw new Error(`A edição falhou com o motivo: ${candidate.finishReason}. Tente um prompt diferente.`);
+    }
+
+    for (const part of candidate.content.parts) {
         if (part.inlineData) {
-            // Return the raw image from the model, without any client-side resizing.
             return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
         }
     }
     
-    throw new Error("A edição da imagem falhou. O modelo pode ter retornado texto em vez de uma imagem. Tente um prompt diferente.");
+    throw new Error("A edição da imagem falhou. O modelo não retornou uma imagem, o que pode ocorrer com instruções complexas. Tente simplificar seu pedido.");
 };

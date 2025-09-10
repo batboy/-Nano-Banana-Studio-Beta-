@@ -6,8 +6,6 @@ const Icons = {
     Save: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>,
     Undo: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"/></svg>,
     Redo: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9h-10.5a5.5 5.5 0 0 0-5.5 5.5v0a5.5 5.5 0 0 0 5.5 5.5H13"/></svg>,
-    // Create mode icons
-    Freeform: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/><path d="M18 5h6m-3-3v6"/><path d="M5 18l4-6 4 6H5z"/><path d="M11 18l4-4 4 4h-8z"/></svg>,
 };
 
 
@@ -973,7 +971,7 @@ function App() {
                   <>
                     <h2 className="text-md font-semibold text-gray-400 pt-2 flex items-center gap-2"><span className="material-symbols-outlined text-xl">auto_awesome</span> Função Criativa</h2>
                     <div className="grid grid-cols-2 gap-3">
-                        <FunctionCard data-function="free" isActive={activeCreateFunction === 'free'} onClick={handleCreateFunctionClick} icon={<Icons.Freeform />} name="Livre" />
+                        <FunctionCard data-function="free" isActive={activeCreateFunction === 'free'} onClick={handleCreateFunctionClick} icon={<span className="material-symbols-outlined text-2xl">image</span>} name="Livre" />
                         <FunctionCard data-function="sticker" isActive={activeCreateFunction === 'sticker'} onClick={handleCreateFunctionClick} icon={<span className="material-symbols-outlined text-2xl">sticky_note_2</span>} name="Adesivo" />
                         <FunctionCard data-function="text" isActive={activeCreateFunction === 'text'} onClick={handleCreateFunctionClick} icon={<span className="material-symbols-outlined text-2xl">text_format</span>} name="Texto" />
                         <FunctionCard data-function="comic" isActive={activeCreateFunction === 'comic'} onClick={handleCreateFunctionClick} icon={<span className="material-symbols-outlined text-2xl">view_quilt</span>} name="Quadrinho" />
@@ -1120,7 +1118,12 @@ function App() {
                         </svg>
                     ) : 'Gerar Imagem'}
                 </button>
-                {error && <p className="text-sm text-gray-300 text-center">{error}</p>}
+                {error && (
+                    <div className="mt-4 p-3 bg-gray-800 border border-gray-700 rounded-lg flex items-start space-x-3" role="alert">
+                        <span className="material-symbols-outlined text-gray-400 text-xl mt-0.5" aria-hidden="true">error</span>
+                        <p className="text-sm text-gray-300">{error}</p>
+                    </div>
+                )}
 
             </div>
 
