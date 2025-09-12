@@ -26,7 +26,7 @@ const Slider: React.FC<{
 
     return (
         <div className="flex items-center gap-2">
-            {label && <span className="text-sm text-zinc-300 whitespace-nowrap">{label}:</span>}
+            {label && <span className="text-sm text-zinc-300 whitespace-nowrap">{label}</span>}
             <input
                 ref={inputRef}
                 type="range"
@@ -53,13 +53,33 @@ const FunctionButton: React.FC<{
     data-function={dataFunction}
     onClick={() => onClick(dataFunction)}
     className={`flex flex-col items-center justify-center p-2 border rounded-md cursor-pointer transition-all duration-200 h-16 w-full text-center
-      ${isActive ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-zinc-700 bg-zinc-800 hover:bg-zinc-700/50 text-zinc-400'
+      ${isActive ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800/50 text-zinc-400'
     }`}
   >
     <div className="mb-1">{icon}</div>
     <div className="text-xs font-semibold">{name}</div>
   </button>
 );
+
+const PanelSection: React.FC<{ title: string; icon: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean }> = ({ title, icon, children, defaultOpen = true }) => {
+    const [isOpen, setIsOpen] = useState(defaultOpen);
+
+    return (
+        <div className="border-b border-zinc-800">
+            <button
+                onClick={() => setIsOpen(!isOpen)}
+                className="w-full flex items-center justify-between p-3 text-sm font-semibold text-zinc-300 hover:bg-zinc-800/50"
+            >
+                <div className="flex items-center gap-2">
+                    {icon}
+                    <span>{title}</span>
+                </div>
+                <Icons.ChevronDown className={`transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {isOpen && <div className="p-3 space-y-4">{children}</div>}
+        </div>
+    );
+};
 
 
 interface ImageEditorProps {
@@ -99,6 +119,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
     const isPanningRef = useRef(false);
     const panStartRef = useRef({ x: 0, y: 0 });
     const zoomToFitScale = useRef<number>(1);
+    const isSpacebarDownRef = useRef(false);
     
     const currentStrokePointsRef = useRef<{ x: number, y: number }[]>([]);
 
@@ -120,12 +141,9 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
     
         const rect = canvas.getBoundingClientRect();
     
-        // The ratio of the canvas's internal resolution to its displayed size
         const scaleX = canvas.width / rect.width;
         const scaleY = canvas.height / rect.height;
     
-        // Calculate mouse position relative to the canvas element on the screen,
-        // then scale it to the canvas's internal coordinate system.
         const canvasX = (e.clientX - rect.left) * scaleX;
         const canvasY = (e.clientY - rect.top) * scaleY;
         
@@ -185,7 +203,6 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
         
         const scale = imageAspectRatio > containerAspectRatio
             ? (containerWidth / image.width) * 0.95
-            // eslint-disable-next-line
             : (containerHeight / image.height) * 0.95;
             
         zoomToFitScale.current = scale;
@@ -343,7 +360,6 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
             const endPoint = points[points.length - 1];
             const distance = Math.sqrt(Math.pow(endPoint.x - startPoint.x, 2) + Math.pow(endPoint.y - startPoint.y, 2));
 
-            // Use a fixed canvas-space distance to match the reference editor's behavior.
             const triggerDistance = 40;
 
             if (distance < triggerDistance) {
@@ -497,6 +513,40 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
             img.src = data.previewUrl;
         },
     }));
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.repeat || e.code !== 'Space' || isSpacebarDownRef.current) return;
+            
+            const activeEl = document.activeElement;
+            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+                return; 
+            }
+
+            e.preventDefault();
+            isSpacebarDownRef.current = true;
+            if (containerRef.current && !isPanningRef.current) {
+                containerRef.current.style.cursor = 'grab';
+            }
+        };
+
+        const handleKeyUp = (e: KeyboardEvent) => {
+            if (e.code !== 'Space') return;
+            
+            isSpacebarDownRef.current = false;
+            if (containerRef.current && !isPanningRef.current) {
+                containerRef.current.style.cursor = isSelectionEnabled ? 'none' : 'grab';
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
+
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('keyup', handleKeyUp);
+        };
+    }, [isSelectionEnabled]);
     
     const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
         if (!containerRef.current) return;
@@ -515,23 +565,34 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
     };
 
     const handleContainerMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-        if (e.button === 1 || e.button === 2) { // Middle or Right mouse button
+        if ((isSpacebarDownRef.current && e.button === 0) || e.button === 1 || e.button === 2) {
             e.preventDefault();
             isPanningRef.current = true;
             panStartRef.current = { x: e.clientX - transform.x, y: e.clientY - transform.y };
             if (containerRef.current) containerRef.current.style.cursor = 'grabbing';
-        } else if (e.button === 0 && isSelectionEnabled) {
+        } 
+        else if (e.button === 0 && isSelectionEnabled) {
             startDrawing(e);
         }
     };
     
+    const stopPanning = useCallback(() => {
+        if (!isPanningRef.current) return;
+        isPanningRef.current = false;
+        if (containerRef.current) {
+            containerRef.current.style.cursor = isSpacebarDownRef.current 
+                ? 'grab' 
+                : isSelectionEnabled 
+                    ? 'none' 
+                    : 'grab';
+        }
+    }, [isSelectionEnabled]);
+
     const handleContainerMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
-        if (isPanningRef.current && (e.button === 1 || e.button === 2)) {
-            isPanningRef.current = false;
-            if (containerRef.current) containerRef.current.style.cursor = isSelectionEnabled ? 'none' : 'grab';
-        } else if (e.button === 0 && isSelectionEnabled) {
+        if (isDrawing && e.button === 0) {
             stopDrawing();
         }
+        stopPanning();
     };
     
     const handleContainerMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -550,10 +611,11 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
     };
     
     const handleContainerMouseLeave = () => {
-        if (isPanningRef.current) isPanningRef.current = false;
-        if (containerRef.current) containerRef.current.style.cursor = isSelectionEnabled ? 'none' : 'default';
+        if (isDrawing) {
+            stopDrawing();
+        }
+        stopPanning();
         setCursorPreview(prev => ({ ...prev, visible: false }));
-        if (isDrawing) stopDrawing();
     };
 
     const handleMiniMapPan = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -606,14 +668,14 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
              onMouseMove={handleContainerMouseMove}
              onMouseUp={handleContainerMouseUp}
              onMouseLeave={handleContainerMouseLeave}
-             onContextMenu={(e) => e.preventDefault()} // Prevent context menu on right-click pan
+             onContextMenu={(e) => e.preventDefault()}
+             style={{ cursor: isSelectionEnabled ? 'none' : 'grab' }}
              >
             <div 
                 className="absolute top-0 left-0"
                 style={{ 
                     transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
                     transformOrigin: 'top left',
-                    cursor: isSelectionEnabled ? 'none' : 'grab'
                 }}
             >
                 <canvas ref={imageCanvasRef} className="block" />
@@ -644,7 +706,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
             
             {showMiniMap && (
                 <div 
-                    className="absolute top-4 right-4 bg-zinc-900/70 backdrop-blur-sm rounded-lg shadow-lg ring-1 ring-white/10 overflow-hidden"
+                    className="absolute top-4 right-4 bg-zinc-950/70 backdrop-blur-sm rounded-lg shadow-lg ring-1 ring-white/10 overflow-hidden"
                     onMouseLeave={handleMiniMapMouseUp}
                 >
                     <canvas
@@ -718,31 +780,26 @@ const ReferenceMaskEditor: React.FC<ReferenceMaskEditorProps> = ({ isOpen, image
         
         const rect = canvas.getBoundingClientRect();
 
-        // Calculate the actual rendered dimensions due to 'object-fit: contain'
         const canvasRatio = canvas.width / canvas.height;
         const rectRatio = rect.width / rect.height;
 
         let renderedWidth, renderedHeight, offsetX, offsetY;
 
         if (canvasRatio > rectRatio) {
-            // Image is wider than the container, so it's letterboxed vertically
             renderedWidth = rect.width;
             renderedHeight = rect.width / canvasRatio;
             offsetX = 0;
             offsetY = (rect.height - renderedHeight) / 2;
         } else {
-            // Image is taller than the container, so it's letterboxed horizontally
             renderedHeight = rect.height;
             renderedWidth = rect.height * canvasRatio;
             offsetY = 0;
             offsetX = (rect.width - renderedWidth) / 2;
         }
 
-        // Mouse position relative to the rendered image area
         const mouseX = e.clientX - rect.left - offsetX;
         const mouseY = e.clientY - rect.top - offsetY;
         
-        // Scale mouse position from rendered dimensions to canvas's native resolution
         const scaleX = canvas.width / renderedWidth;
         const scaleY = canvas.height / renderedHeight;
 
@@ -769,7 +826,7 @@ const ReferenceMaskEditor: React.FC<ReferenceMaskEditorProps> = ({ isOpen, image
         const data = imageData.data;
         
         const alpha = Math.round(opacity * 255);
-        const fillColorRgba = [74, 222, 128, alpha]; // Green
+        const fillColorRgba = [74, 222, 128, alpha];
         
         const startPixelPos = (startY * width + startX) * 4;
         
@@ -878,14 +935,12 @@ const ReferenceMaskEditor: React.FC<ReferenceMaskEditorProps> = ({ isOpen, image
             const container = containerRef.current;
             if (!imageCanvas || !maskCanvas || !container) return;
 
-            // Set canvas resolution to image's native resolution
             const canvasW = image.width;
             const canvasH = image.height;
 
             [imageCanvas, maskCanvas].forEach(canvas => {
                 canvas.width = canvasW;
                 canvas.height = canvasH;
-                 // Reset styles to let CSS handle fitting
                 canvas.style.width = '100%';
                 canvas.style.height = '100%';
                 canvas.style.objectFit = 'contain';
@@ -935,7 +990,7 @@ const ReferenceMaskEditor: React.FC<ReferenceMaskEditorProps> = ({ isOpen, image
             const endPoint = points[points.length - 1];
             const distance = Math.sqrt(Math.pow(endPoint.x - startPoint.x, 2) + Math.pow(endPoint.y - startPoint.y, 2));
 
-            if (distance < 40) { // Using a fixed canvas-space distance
+            if (distance < 40) {
                 fillEnclosedArea(points);
             }
         }
@@ -1075,7 +1130,7 @@ const ReferenceMaskEditor: React.FC<ReferenceMaskEditorProps> = ({ isOpen, image
                             />
                         )}
                     </div>
-                    <div className="w-56 flex-shrink-0 flex flex-col gap-6 bg-zinc-800/50 p-4 rounded-md">
+                    <div className="w-56 flex-shrink-0 flex flex-col gap-6 bg-zinc-900/50 p-4 rounded-md ring-1 ring-white/5">
                         <div className="flex bg-zinc-800 p-1 rounded-md justify-center">
                             <button onClick={() => setMaskTool('brush')} title="Pincel" className={`p-2 rounded transition-colors w-full flex items-center justify-center ${maskTool === 'brush' ? 'bg-zinc-700' : 'hover:bg-zinc-700/50'}`}>
                                 <Icons.Brush />
@@ -1088,20 +1143,30 @@ const ReferenceMaskEditor: React.FC<ReferenceMaskEditorProps> = ({ isOpen, image
                             </button>
                         </div>
                          <div className="flex flex-col gap-2">
-                            <label htmlFor="refBrushSize" className="text-sm text-zinc-300 whitespace-nowrap">Tamanho do Pincel</label>
-                            <input id="refBrushSize" type="range" min="5" max="150" value={brushSize} onChange={e => setBrushSize(parseInt(e.target.value, 10))} className="w-full" aria-label="Tamanho do pincel" />
+                            <label htmlFor="refBrushSize" className="text-sm text-zinc-300 whitespace-nowrap">Tamanho</label>
+                            <Slider
+                                value={brushSize} min={5} max={150}
+                                onChange={(e) => setBrushSize(parseInt(e.target.value, 10))}
+                                aria-label="Tamanho do Pincel"
+                                sliderWidthClass="w-full"
+                            />
                         </div>
                         <div className="flex flex-col gap-2">
-                            <label htmlFor="refMaskOpacity" className="text-sm text-zinc-300 whitespace-nowrap">Opacidade do Pincel</label>
-                            <input id="refMaskOpacity" type="range" min="0.1" max="1" step="0.05" value={maskOpacity} onChange={e => setMaskOpacity(parseFloat(e.target.value))} className="w-full" aria-label="Opacidade do pincel" />
+                            <label htmlFor="refMaskOpacity" className="text-sm text-zinc-300 whitespace-nowrap">Opacidade</label>
+                            <Slider
+                                value={maskOpacity * 100} min={10} max={100}
+                                onChange={(e) => setMaskOpacity(parseInt(e.target.value, 10) / 100)}
+                                aria-label="Opacidade da Máscara"
+                                sliderWidthClass="w-full"
+                            />
                         </div>
-                        <div className="text-xs text-zinc-400 mt-auto">
+                        <div className="text-xs text-zinc-400 mt-auto p-2 bg-zinc-800/50 rounded-md">
                             <p className="font-semibold mb-1">Dica:</p>
                             <p>Pinte sobre a área que deseja usar na composição. Você não precisa ser perfeitamente preciso.</p>
                         </div>
                     </div>
                 </div>
-                <div className="flex justify-end gap-3 pt-4 flex-shrink-0">
+                <div className="flex justify-end gap-3 pt-4 flex-shrink-0 border-t border-zinc-800 mt-4">
                     <button onClick={onClose} className="px-4 py-2 text-sm font-semibold rounded-md bg-zinc-800 hover:bg-zinc-700 transition-colors">
                         Cancelar
                     </button>
@@ -1254,6 +1319,7 @@ export default function App() {
     const [isDragging, setIsDragging] = useState<boolean>(false);
     const [dragTarget, setDragTarget] = useState<'main' | 'reference' | null>(null);
     const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([]);
+    const [activeLeftPanelTab, setActiveLeftPanelTab] = useState<'properties' | 'history'>('properties');
     
     // Dialogs & Modals state
     const [confirmationDialog, setConfirmationDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
@@ -1270,6 +1336,9 @@ export default function App() {
     // Refs
     const editorRef = useRef<ImageEditorRef>(null);
     const mainContentRef = useRef<HTMLDivElement>(null);
+    const dragCounter = useRef(0);
+    const dragLeaveTimeout = useRef<number | null>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
 
     const generatedImage = history[historyIndex]?.imageUrl ?? null;
 
@@ -1324,14 +1393,10 @@ export default function App() {
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (mode !== 'edit' || activeEditFunction !== 'compose' || isPlacingObject || editingReferenceIndex !== null) {
-                return;
-            }
+            if (mode !== 'edit' || activeEditFunction !== 'compose' || isPlacingObject || editingReferenceIndex !== null) return;
 
             const activeEl = document.activeElement;
-            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
-                return;
-            }
+            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) return;
 
             const step = 5;
 
@@ -1376,6 +1441,7 @@ export default function App() {
             setHistory([]);
             setHistoryIndex(-1);
             setPrompt('');
+            setActiveLeftPanelTab('properties');
         };
 
         if (newMode === 'create' && mode === 'edit' && history.length > 0) {
@@ -1390,8 +1456,9 @@ export default function App() {
 
         if (newMode === 'create') {
             performSwitchToCreate();
-        } else { // Switching to 'edit'
+        } else {
             setMode('edit');
+            setActiveLeftPanelTab('properties');
             resetImages();
             if (generatedImage) {
                 const currentEntry = history[historyIndex];
@@ -1420,18 +1487,19 @@ export default function App() {
             setActiveCreateFunction(entry.createFunction!);
             setAspectRatio(entry.aspectRatio!);
             resetImages(); 
+            setActiveLeftPanelTab('properties');
         } else { 
             setActiveEditFunction(entry.editFunction!);
             setReferenceImages(entry.referenceImages || []);
             if (entry.editFunction === 'style' && entry.styleStrength) {
                 setStyleStrength(entry.styleStrength);
             }
+            setActiveLeftPanelTab('properties');
         }
     }, [history]);
 
     const handleCreateFunctionClick = (func: CreateFunction) => {
         setActiveCreateFunction(func);
-        // Reset style modifier when function changes
         const options = styleOptions[func];
         setStyleModifier(options.length > 0 ? options[0].value : 'default');
     };
@@ -1442,7 +1510,7 @@ export default function App() {
 
     const handleEditFunctionClick = (func: EditFunction) => {
         if (func !== activeEditFunction) {
-            setReferenceImages([]); // Clear references on function switch
+            setReferenceImages([]);
         }
         setActiveEditFunction(func);
     };
@@ -1552,7 +1620,12 @@ export default function App() {
     const handleDragEnter = (e: React.DragEvent<HTMLDivElement>, target: 'main' | 'reference') => {
         e.preventDefault();
         e.stopPropagation();
-        if (mode === 'edit') {
+        if (dragLeaveTimeout.current) {
+            clearTimeout(dragLeaveTimeout.current);
+            dragLeaveTimeout.current = null;
+        }
+        dragCounter.current++;
+        if (mode === 'edit' && dragCounter.current > 0) {
             setIsDragging(true);
             setDragTarget(target);
         }
@@ -1561,8 +1634,13 @@ export default function App() {
     const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
         e.preventDefault();
         e.stopPropagation();
-        setIsDragging(false);
-        setDragTarget(null);
+        dragCounter.current--;
+        if (dragCounter.current === 0) {
+            dragLeaveTimeout.current = window.setTimeout(() => {
+                setIsDragging(false);
+                setDragTarget(null);
+            }, 100);
+        }
     };
     
     const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
@@ -1573,6 +1651,11 @@ export default function App() {
     const handleDrop = (e: React.DragEvent<HTMLDivElement>, target: 'main' | 'reference') => {
         e.preventDefault();
         e.stopPropagation();
+        if (dragLeaveTimeout.current) {
+            clearTimeout(dragLeaveTimeout.current);
+            dragLeaveTimeout.current = null;
+        }
+        dragCounter.current = 0;
         setIsDragging(false);
         setDragTarget(null);
         if (mode === 'edit') {
@@ -1586,9 +1669,17 @@ export default function App() {
     const handleMainCanvasDrop = (e: React.DragEvent<HTMLDivElement>) => {
         e.preventDefault();
         e.stopPropagation();
+        if (dragLeaveTimeout.current) {
+            clearTimeout(dragLeaveTimeout.current);
+            dragLeaveTimeout.current = null;
+        }
         const refIndexStr = e.dataTransfer.getData('ref-index');
         
         if (mode === 'edit' && activeEditFunction === 'compose' && refIndexStr && mainContentRef.current) {
+            dragCounter.current = 0;
+            setIsDragging(false);
+            setDragTarget(null);
+
             const refIndex = parseInt(refIndexStr, 10);
             const refImage = referenceImages[refIndex];
             
@@ -1648,6 +1739,7 @@ export default function App() {
                 const newHistory = history.slice(0, historyIndex + 1);
                 setHistory([...newHistory, newEntry]);
                 setHistoryIndex(newHistory.length);
+                setActiveLeftPanelTab('history');
             }
 
         } catch (error: any) {
@@ -1704,6 +1796,7 @@ export default function App() {
                 const newHistory = history.slice(0, historyIndex + 1);
                 setHistory([...newHistory, newEntry]);
                 setHistoryIndex(newHistory.length);
+                setActiveLeftPanelTab('history');
             }
 
         } catch (error: any) {
@@ -1716,19 +1809,22 @@ export default function App() {
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
+                if (prompt.trim() !== '') {
+                    e.preventDefault();
+                }
                 if (!isLoading) {
                     generateImageHandler();
                 }
             }
         };
 
-        window.addEventListener('keydown', handleKeyDown);
+        const textarea = textareaRef.current;
+        textarea?.addEventListener('keydown', handleKeyDown);
 
         return () => {
-            window.removeEventListener('keydown', handleKeyDown);
+            textarea?.removeEventListener('keydown', handleKeyDown);
         };
-    }, [isLoading, generateImageHandler]);
+    }, [isLoading, generateImageHandler, prompt]);
 
     const handleUndo = () => {
         if (historyIndex > 0) {
@@ -1772,6 +1868,7 @@ export default function App() {
         setStyleModifier('default');
         setCameraAngle('default');
         setLightingStyle('default');
+        setActiveLeftPanelTab('properties');
         editorRef.current?.clearMask();
     };
 
@@ -1814,6 +1911,15 @@ export default function App() {
         return styleDescription;
     }, [mode, prompt, activeCreateFunction, styleModifier, cameraAngle, lightingStyle]);
 
+    const autoResizeTextarea = useCallback(() => {
+        const textarea = textareaRef.current;
+        if (textarea) {
+            textarea.style.height = 'auto';
+            const scrollHeight = textarea.scrollHeight;
+            textarea.style.height = `${scrollHeight}px`;
+        }
+    }, []);
+
     useEffect(() => {
         if (window.innerWidth < 1024) {
             setShowMobileModal(true);
@@ -1821,7 +1927,6 @@ export default function App() {
     }, []);
     
     useEffect(() => {
-        // Set default style modifier when function changes
         const options = styleOptions[activeCreateFunction];
         if (options.length > 0) {
             setStyleModifier(options[0].value);
@@ -1853,7 +1958,7 @@ export default function App() {
     const isRedoDisabled = historyIndex >= history.length - 1;
 
     return (
-        <div className="flex h-screen w-screen overflow-hidden bg-zinc-900 text-zinc-300 font-sans">
+        <div className="flex h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-300 font-sans">
             <ConfirmationDialog
                 isOpen={confirmationDialog.isOpen}
                 title={confirmationDialog.title}
@@ -1884,8 +1989,8 @@ export default function App() {
                 </div>
             )}
             
-            {/* Vertical Toolbar */}
-            <div className="w-16 bg-zinc-950/70 p-2 flex flex-col items-center space-y-2 border-r border-zinc-800">
+            {/* Left Toolbar */}
+            <div className="w-16 bg-zinc-950 p-2 flex flex-col items-center space-y-2 border-r border-zinc-800">
                 <div 
                     className="p-2 mb-2 cursor-pointer transition-transform duration-200 hover:scale-110"
                     onClick={handleEasterEggClick}
@@ -1901,226 +2006,226 @@ export default function App() {
                 </button>
             </div>
 
-            {/* Left Panel */}
-            <div className="w-[300px] bg-zinc-900 p-4 flex flex-col space-y-4 border-r border-zinc-800">
-                <div className="flex-grow overflow-y-auto space-y-5 pr-2">
-                    {mode === 'create' && (
-                      <>
-                        <div>
-                            <h2 className="text-sm font-semibold text-zinc-400 mb-3 flex items-center gap-2"><Icons.Sparkles /> Função Criativa</h2>
-                            <div className="grid grid-cols-2 gap-2">
-                                <FunctionButton data-function="free" isActive={activeCreateFunction === 'free'} onClick={handleCreateFunctionClick} icon={<Icons.Image />} name="Livre" />
-                                <FunctionButton data-function="sticker" isActive={activeCreateFunction === 'sticker'} onClick={handleCreateFunctionClick} icon={<Icons.Sticker />} name="Adesivo" />
-                                <FunctionButton data-function="text" isActive={activeCreateFunction === 'text'} onClick={handleCreateFunctionClick} icon={<Icons.Type />} name="Logo" />
-                                <FunctionButton data-function="comic" isActive={activeCreateFunction === 'comic'} onClick={handleCreateFunctionClick} icon={<Icons.Comic />} name="Quadrinho" />
-                            </div>
-                        </div>
-                        <div>
-                            <h2 className="text-sm font-semibold text-zinc-400 mb-3 flex items-center gap-2"><Icons.AspectRatio /> Proporção</h2>
-                            <div className="grid grid-cols-3 gap-2">
-                                {['1:1', '16:9', '9:16', '4:3', '3:4'].map(ratio => (
-                                    <button key={ratio} onClick={() => handleAspectRatioChange(ratio)} className={`p-2 border rounded-md transition-colors text-xs ${aspectRatio === ratio ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-zinc-700 bg-zinc-800 hover:bg-zinc-700/50'}`}>
-                                        {ratio}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                        <div>
-                            <h2 className="text-sm font-semibold text-zinc-400 mb-3 flex items-center gap-2"><Icons.Settings /> Configurações Avançadas</h2>
-                            <div className="space-y-4">
-                                {styleOptions[activeCreateFunction].length > 0 && (
-                                    <div className="custom-select-wrapper">
-                                        <select value={styleModifier} onChange={(e) => setStyleModifier(e.target.value)} className="custom-select" aria-label="Modificador de estilo">
-                                            {styleOptions[activeCreateFunction].map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                                        </select>
-                                    </div>
-                                )}
-                                {activeCreateFunction === 'free' && (
-                                    <>
-                                        <div className="custom-select-wrapper">
-                                            <select value={cameraAngle} onChange={(e) => setCameraAngle(e.target.value)} className="custom-select" aria-label="Ângulo da câmera">
-                                                {cameraAngleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                                            </select>
+            {/* Consolidated Left Panel */}
+            <div className="w-[320px] bg-zinc-900 flex flex-col border-r border-zinc-800">
+                <div className="h-12 flex-shrink-0 flex items-center border-b border-zinc-800 text-sm font-semibold">
+                    <button onClick={() => setActiveLeftPanelTab('properties')} className={`flex-1 h-full flex items-center justify-center gap-2 ${activeLeftPanelTab === 'properties' ? 'text-zinc-100 bg-zinc-800/50' : 'text-zinc-400 hover:bg-zinc-800/50'}`}>
+                        <Icons.Settings /> Propriedades
+                    </button>
+                    <button onClick={() => setActiveLeftPanelTab('history')} className={`flex-1 h-full flex items-center justify-center gap-2 ${activeLeftPanelTab === 'history' ? 'text-zinc-100 bg-zinc-800/50' : 'text-zinc-400 hover:bg-zinc-800/50'}`}>
+                        <Icons.History /> Histórico
+                    </button>
+                </div>
+                <div className="flex-grow overflow-y-auto">
+                    {activeLeftPanelTab === 'properties' && (
+                         <>
+                            {mode === 'create' && (
+                                <>
+                                    <PanelSection title="Função Criativa" icon={<Icons.Sparkles />}>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <FunctionButton data-function="free" isActive={activeCreateFunction === 'free'} onClick={handleCreateFunctionClick} icon={<Icons.Image />} name="Livre" />
+                                            <FunctionButton data-function="sticker" isActive={activeCreateFunction === 'sticker'} onClick={handleCreateFunctionClick} icon={<Icons.Sticker />} name="Adesivo" />
+                                            <FunctionButton data-function="text" isActive={activeCreateFunction === 'text'} onClick={handleCreateFunctionClick} icon={<Icons.Type />} name="Logo" />
+                                            <FunctionButton data-function="comic" isActive={activeCreateFunction === 'comic'} onClick={handleCreateFunctionClick} icon={<Icons.Comic />} name="Quadrinho" />
                                         </div>
-                                        <div className="custom-select-wrapper">
-                                            <select value={lightingStyle} onChange={(e) => setLightingStyle(e.target.value)} className="custom-select" aria-label="Estilo de iluminação">
-                                                {lightingStyleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                                            </select>
-                                        </div>
-                                    </>
-                                )}
-                                <textarea
-                                    value={negativePrompt}
-                                    onChange={(e) => setNegativePrompt(e.target.value)}
-                                    placeholder="Prompt Negativo (opcional): e.g., 'texto, marcas d'água'"
-                                    className="w-full bg-zinc-800 p-2 rounded-md text-sm placeholder-zinc-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                                    rows={2}
-                                />
-                                {finalPromptPreview && (
-                                    <div className="text-xs text-zinc-400 p-2 bg-zinc-800/50 rounded-md">
-                                        <p className="font-semibold mb-1">Prompt Final:</p>
-                                        <p>{finalPromptPreview}</p>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                      </>
-                    )}
-                    {mode === 'edit' && (
-                        <>
-                            <div>
-                                <h2 className="text-sm font-semibold text-zinc-400 mb-3 flex items-center gap-2"><Icons.Layers /> Função de Edição</h2>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <FunctionButton data-function="compose" isActive={activeEditFunction === 'compose'} onClick={handleEditFunctionClick} icon={<Icons.Layers />} name="Composição" />
-                                    <FunctionButton data-function="style" isActive={activeEditFunction === 'style'} onClick={handleEditFunctionClick} icon={<Icons.Palette />} name="Estilo" />
-                                </div>
-                            </div>
-                            {activeEditFunction === 'style' && (
-                                <div>
-                                    <h2 className="text-sm font-semibold text-zinc-400 mb-3 flex items-center gap-2"><Icons.Sliders /> Intensidade do Estilo</h2>
-                                    <Slider
-                                        value={styleStrength}
-                                        min={10} max={100}
-                                        onChange={(e) => setStyleStrength(parseInt(e.target.value, 10))}
-                                        aria-label="Intensidade do estilo"
-                                        sliderWidthClass="w-full"
-                                    />
-                                </div>
-                            )}
-                            <div 
-                                onDragEnter={(e) => handleDragEnter(e, 'reference')}
-                                onDragLeave={handleDragLeave}
-                                onDragOver={handleDragOver}
-                                onDrop={(e) => handleDrop(e, 'reference')}
-                            >
-                                <h2 className="text-sm font-semibold text-zinc-400 mb-3 flex items-center gap-2"><Icons.Reference /> Imagens de Referência</h2>
-                                <div className={`p-4 border-2 border-dashed rounded-md transition-colors ${dragTarget === 'reference' ? 'border-blue-500 bg-blue-500/10' : 'border-zinc-700'}`}>
-                                    <input
-                                        type="file"
-                                        id="reference-upload"
-                                        className="hidden"
-                                        multiple
-                                        accept="image/png, image/jpeg, image/webp"
-                                        onChange={(e) => handleImageUpload(e.target.files, 'reference')}
-                                    />
-                                    <label htmlFor="reference-upload" className="cursor-pointer text-center block">
-                                        <Icons.UploadCloud className="mx-auto text-4xl text-zinc-500" />
-                                        <p className="text-xs mt-2">Arraste e solte ou clique para enviar</p>
-                                        {activeEditFunction === 'style' && <p className="text-xs text-zinc-500">(1 imagem de estilo)</p>}
-                                    </label>
-                                </div>
-                                <div className="mt-4 space-y-2">
-                                    {referenceImages.map((ref, index) => (
-                                        <div key={index} className="flex items-center gap-2 p-2 bg-zinc-800 rounded-md" draggable onDragStart={(e) => {
-                                            if (ref.maskedObjectPreviewUrl) {
-                                                e.dataTransfer.setData('ref-index', index.toString());
-                                            }
-                                        }}>
-                                            <img 
-                                                src={ref.maskedObjectPreviewUrl || ref.previewUrl} 
-                                                alt={`Reference ${index + 1}`} 
-                                                className={`w-10 h-10 object-cover rounded ${ref.maskedObjectPreviewUrl ? 'cursor-grab' : 'cursor-default'}`} 
-                                            />
-                                            <span className="text-xs flex-1 truncate">Referência {index + 1}</span>
-                                            {activeEditFunction === 'compose' && (
-                                                <button onClick={() => setEditingReferenceIndex(index)} className="p-1 hover:bg-zinc-700 rounded" title="Selecionar objeto">
-                                                    <Icons.Select />
+                                    </PanelSection>
+                                    <PanelSection title="Proporção" icon={<Icons.AspectRatio />}>
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {['1:1', '16:9', '9:16', '4:3', '3:4'].map(ratio => (
+                                                <button key={ratio} onClick={() => handleAspectRatioChange(ratio)} className={`p-2 border rounded-md transition-colors text-xs ${aspectRatio === ratio ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800/50'}`}>
+                                                    {ratio}
                                                 </button>
-                                            )}
-                                            <button onClick={() => handleRemoveImage(index)} className="p-1 text-red-400 hover:bg-zinc-700 rounded" title="Remover">
-                                               <Icons.Close className="text-base" />
-                                            </button>
+                                            ))}
                                         </div>
-                                    ))}
-                                </div>
-                            </div>
+                                    </PanelSection>
+                                    <PanelSection title="Configurações Avançadas" icon={<Icons.Settings />} defaultOpen={false}>
+                                        <div className="space-y-4">
+                                            {styleOptions[activeCreateFunction].length > 0 && (
+                                                <div className="custom-select-wrapper">
+                                                    <select value={styleModifier} onChange={(e) => setStyleModifier(e.target.value)} className="custom-select" aria-label="Modificador de estilo">
+                                                        {styleOptions[activeCreateFunction].map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                                    </select>
+                                                </div>
+                                            )}
+                                            {activeCreateFunction === 'free' && (
+                                                <>
+                                                    <div className="custom-select-wrapper">
+                                                        <select value={cameraAngle} onChange={(e) => setCameraAngle(e.target.value)} className="custom-select" aria-label="Ângulo da câmera">
+                                                            {cameraAngleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                                        </select>
+                                                    </div>
+                                                    <div className="custom-select-wrapper">
+                                                        <select value={lightingStyle} onChange={(e) => setLightingStyle(e.target.value)} className="custom-select" aria-label="Estilo de iluminação">
+                                                            {lightingStyleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                                        </select>
+                                                    </div>
+                                                </>
+                                            )}
+                                            <textarea
+                                                value={negativePrompt}
+                                                onChange={(e) => setNegativePrompt(e.target.value)}
+                                                placeholder="Prompt Negativo (opcional): e.g., 'texto, marcas d'água'"
+                                                className="w-full bg-zinc-800 p-2 rounded-md text-sm placeholder-zinc-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                                                rows={2}
+                                            />
+                                            {finalPromptPreview && (
+                                                <div className="text-xs text-zinc-400 p-2 bg-zinc-800/50 rounded-md">
+                                                    <p className="font-semibold mb-1">Prompt Final:</p>
+                                                    <p>{finalPromptPreview}</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </PanelSection>
+                                </>
+                            )}
+                            {mode === 'edit' && (
+                                <>
+                                    <PanelSection title="Função de Edição" icon={<Icons.Layers />}>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <FunctionButton data-function="compose" isActive={activeEditFunction === 'compose'} onClick={handleEditFunctionClick} icon={<Icons.Layers />} name="Composição" />
+                                            <FunctionButton data-function="style" isActive={activeEditFunction === 'style'} onClick={handleEditFunctionClick} icon={<Icons.Palette />} name="Estilo" />
+                                        </div>
+                                    </PanelSection>
+                                    {activeEditFunction === 'style' && (
+                                        <PanelSection title="Intensidade do Estilo" icon={<Icons.Sliders />}>
+                                            <Slider
+                                                value={styleStrength}
+                                                min={10} max={100}
+                                                onChange={(e) => setStyleStrength(parseInt(e.target.value, 10))}
+                                                aria-label="Intensidade do estilo"
+                                                sliderWidthClass="w-full"
+                                            />
+                                        </PanelSection>
+                                    )}
+                                    <PanelSection title="Referências" icon={<Icons.Reference />}>
+                                        <div onDragEnter={(e) => handleDragEnter(e, 'reference')} onDragLeave={handleDragLeave} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, 'reference')}>
+                                            <div className={`border-2 rounded-md transition-all duration-200 ${dragTarget === 'reference' ? 'border-blue-500 bg-blue-500/10 border-solid scale-105' : 'border-zinc-800 border-dashed'}`}>
+                                                <input type="file" id="reference-upload" className="hidden" multiple accept="image/png, image/jpeg, image/webp" onChange={(e) => handleImageUpload(e.target.files, 'reference')} disabled={mode !== 'edit'} />
+                                                <label htmlFor="reference-upload" className={`${mode !== 'edit' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} flex items-center justify-center gap-2 text-center p-2`}>
+                                                    <Icons.UploadCloud className="text-2xl text-zinc-500" />
+                                                    <span className="text-xs">Arraste ou clique para enviar</span>
+                                                </label>
+                                            </div>
+                                            {mode === 'edit' && activeEditFunction === 'style' && <p className="text-xs text-zinc-500 text-center mt-2">(Máximo de 1 imagem de estilo)</p>}
+                                            <div className="mt-4 space-y-2">
+                                                {referenceImages.map((ref, index) => (
+                                                    <div key={index} className="flex items-center gap-2 p-2 bg-zinc-800 rounded-md" draggable onDragStart={(e) => { if (ref.maskedObjectPreviewUrl) { e.dataTransfer.setData('ref-index', index.toString()); } }}>
+                                                        <img src={ref.maskedObjectPreviewUrl || ref.previewUrl} alt={`Reference ${index + 1}`} className={`w-10 h-10 object-cover rounded ${ref.maskedObjectPreviewUrl ? 'cursor-grab' : 'cursor-default'}`} />
+                                                        <span className="text-xs flex-1 truncate">Referência {index + 1}</span>
+                                                        {activeEditFunction === 'compose' && ( <button onClick={() => setEditingReferenceIndex(index)} className="p-1 hover:bg-zinc-700 rounded" title="Selecionar objeto"> <Icons.Select /> </button> )}
+                                                        <button onClick={() => handleRemoveImage(index)} className="p-1 text-red-400 hover:bg-zinc-700 rounded" title="Remover"> <Icons.Close className="text-base" /> </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </PanelSection>
+                                </>
+                            )}
                         </>
                     )}
-                </div>
-
-                {/* Prompt Textarea */}
-                <div className="flex-shrink-0 space-y-3">
-                     <div className="relative">
-                        <textarea
-                            value={prompt}
-                            onChange={(e) => setPrompt(e.target.value)}
-                            placeholder={
-                                mode === 'create'
-                                    ? 'Descreva sua ideia... (ex: um astronauta surfando em uma onda cósmica)'
-                                    : 'Descreva sua edição... (ex: adicione um chapéu de pirata no gato)'
-                            }
-                            className="w-full bg-zinc-800 p-3 rounded-md text-sm placeholder-zinc-500 focus:ring-1 focus:ring-blue-500 focus:outline-none resize-none pr-10"
-                            rows={4}
-                            aria-label="Prompt principal"
-                        />
-                         <Icons.Prompt className="absolute top-3 right-3 text-zinc-500" />
-                    </div>
-                    <button
-                        onClick={generateImageHandler}
-                        disabled={isLoading}
-                        className="w-full bg-blue-600 text-white font-semibold py-3 px-4 rounded-md hover:bg-blue-500 transition-colors flex items-center justify-center disabled:bg-zinc-700 disabled:cursor-not-allowed"
-                    >
-                        {isLoading ? <Icons.Loader /> : 'Gerar (Ctrl+Enter)'}
-                    </button>
-                    {error && (
-                        <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm p-3 rounded-md flex items-start gap-2">
-                            <Icons.AlertCircle className="mt-0.5" />
-                            <span>{error}</span>
+                    
+                    {activeLeftPanelTab === 'history' && (
+                        <div className="p-3 space-y-2">
+                            {history.length === 0 ? (
+                                <p className="text-xs text-zinc-500 text-center py-4">Nenhuma ação registrada.</p>
+                            ) : (
+                                [...history].reverse().map((entry, revIndex) => {
+                                    const index = history.length - 1 - revIndex;
+                                    return (
+                                    <button key={entry.id} onClick={() => handleHistoryNavigation(index)} className={`w-full flex items-center gap-3 p-2 rounded-md text-left transition-colors ${historyIndex === index ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}`}>
+                                        <img src={entry.imageUrl} alt="" className="w-10 h-10 object-cover rounded-md flex-shrink-0 bg-zinc-700" />
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-xs font-semibold truncate">{getHistoryEntryTitle(entry)}</p>
+                                            <p className="text-xs text-zinc-400 truncate">{entry.prompt || 'Imagem inicial'}</p>
+                                        </div>
+                                    </button>
+                                )})
+                            )}
                         </div>
                     )}
+                </div>
+                 {/* Prompt Area */}
+                <div className="flex-shrink-0 bg-zinc-900/50 border-t border-zinc-800 p-4">
+                    <div className="w-full flex flex-col gap-3">
+                         {error && (
+                            <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm p-3 rounded-md flex items-start gap-2">
+                                <Icons.AlertCircle className="mt-0.5" />
+                                <span>{error}</span>
+                            </div>
+                        )}
+                        <div className="relative">
+                            <textarea
+                                ref={textareaRef}
+                                value={prompt}
+                                onChange={(e) => setPrompt(e.target.value)}
+                                onInput={autoResizeTextarea}
+                                placeholder={ mode === 'create' ? 'Descreva sua ideia... (ex: um astronauta surfando em uma onda cósmica)' : 'Descreva sua edição... (ex: adicione um chapéu de pirata no gato)' }
+                                className="w-full bg-zinc-800 p-3 rounded-lg text-sm placeholder-zinc-500 focus:ring-1 focus:ring-blue-500 focus:outline-none resize-none pr-4 min-h-[52px] max-h-48 transition-height duration-200"
+                                rows={1}
+                                aria-label="Prompt principal"
+                            />
+                        </div>
+                        <button 
+                            onClick={generateImageHandler} 
+                            disabled={isLoading} 
+                            title="Gerar (Ctrl+Enter)" 
+                            className="w-full h-12 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold rounded-lg hover:from-blue-500 hover:to-indigo-500 transition-all duration-300 flex items-center justify-center gap-2 disabled:from-zinc-700 disabled:to-zinc-600 disabled:cursor-not-allowed transform active:scale-[0.99] shadow-lg hover:shadow-blue-500/30 disabled:shadow-none focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-zinc-900 focus:ring-blue-500"
+                        >
+                            {isLoading ? (
+                                <>
+                                    <Icons.Spinner />
+                                    <span>Gerando...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <span>Gerar</span>
+                                    <Icons.Send />
+                                </>
+                            )}
+                        </button>
+                    </div>
                 </div>
             </div>
 
             {/* Main Content */}
             <div 
                 ref={mainContentRef}
-                className="flex-1 flex flex-col bg-zinc-950" 
+                className="flex-1 flex flex-col bg-zinc-950 relative" 
                 onDragEnter={(e) => handleDragEnter(e, 'main')}
                 onDragLeave={handleDragLeave}
                 onDragOver={handleDragOver}
                 onDrop={handleMainCanvasDrop}
             >
+                {isDragging && dragTarget === 'main' && (
+                    <div className="absolute inset-0 bg-zinc-950/80 backdrop-blur-sm z-40 flex items-center justify-center pointer-events-none p-8">
+                        <div className="w-full h-full flex items-center justify-center border-2 border-dashed border-blue-500 rounded-xl bg-blue-500/10">
+                            <div className="text-center">
+                                <Icons.UploadCloud className="mx-auto text-6xl text-blue-400" />
+                                <p className="mt-4 text-lg font-semibold text-blue-300">Solte para iniciar uma nova edição</p>
+                            </div>
+                        </div>
+                    </div>
+                )}
                 {/* Top Toolbar */}
                 <div className="flex-shrink-0 h-12 bg-zinc-900 flex items-center justify-between px-4 border-b border-zinc-800">
-                    <div className="flex items-center gap-4">
-                        <button onClick={handleUndo} disabled={isUndoDisabled} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Desfazer (Ctrl+Z)">
-                            <Icons.Undo />
-                        </button>
-                        <button onClick={handleRedo} disabled={isRedoDisabled} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Refazer (Ctrl+Y)">
-                            <Icons.Redo />
-                        </button>
-                        <div className="w-px h-6 bg-zinc-700" />
-                         <button onClick={handleClearAll} className="p-2 hover:bg-zinc-800 rounded-md" title="Limpar Tudo">
-                            <Icons.ClearAll />
-                        </button>
+                    <div className="flex items-center gap-1">
+                        <button onClick={handleUndo} disabled={isUndoDisabled} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Desfazer (Ctrl+Z)"> <Icons.Undo /> </button>
+                        <button onClick={handleRedo} disabled={isRedoDisabled} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Refazer (Ctrl+Y)"> <Icons.Redo /> </button>
+                        <div className="w-px h-6 bg-zinc-800 mx-2" />
+                         <button onClick={handleClearAll} className="p-2 hover:bg-zinc-800 rounded-md" title="Limpar Tudo"> <Icons.ClearAll /> </button>
+                        <button onClick={handleSaveImage} disabled={!generatedImage} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Salvar Imagem"> <Icons.Save /> </button>
                     </div>
-                     <div className="flex items-center gap-2">
-                        <span className="text-sm">{Math.round(editorZoom)}%</span>
-                         <button onClick={() => editorRef.current?.zoomOut()} className="p-2 hover:bg-zinc-800 rounded-md" title="Diminuir Zoom">
-                             <Icons.ZoomOut />
-                         </button>
-                         <Slider 
-                            value={editorZoom}
-                            min={20}
-                            max={500}
-                            onChange={(e) => editorRef.current?.setZoom(parseInt(e.target.value, 10))}
-                            aria-label="Zoom do editor"
-                         />
-                         <button onClick={() => editorRef.current?.zoomIn()} className="p-2 hover:bg-zinc-800 rounded-md" title="Aumentar Zoom">
-                             <Icons.ZoomIn />
-                         </button>
-                         <button onClick={() => editorRef.current?.zoomToFit()} className="p-2 hover:bg-zinc-800 rounded-md" title="Ajustar à Tela">
-                             <Icons.FitScreen />
-                         </button>
-                     </div>
-                    <div className="flex items-center gap-4">
-                        <button onClick={handleSaveImage} disabled={!generatedImage} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Salvar Imagem">
-                            <Icons.Save />
-                        </button>
+                    <div className="flex items-center gap-2 text-sm">
+                        <button onClick={() => editorRef.current?.zoomOut()} className="p-2 hover:bg-zinc-800 rounded-md" title="Diminuir Zoom"> <Icons.ZoomOut /> </button>
+                        <div className="w-20 text-center cursor-pointer" onClick={() => editorRef.current?.zoomToFit()}> {Math.round(editorZoom)}% </div>
+                        <button onClick={() => editorRef.current?.zoomIn()} className="p-2 hover:bg-zinc-800 rounded-md" title="Aumentar Zoom"> <Icons.ZoomIn /> </button>
+                         <div className="w-px h-6 bg-zinc-800 mx-2" />
+                        <button onClick={() => editorRef.current?.zoomToFit()} className="p-2 hover:bg-zinc-800 rounded-md" title="Ajustar à Tela"> <Icons.FitScreen /> </button>
                     </div>
                 </div>
+
                 {/* Canvas Area */}
-                 <div className="flex-1 relative bg-zinc-950/80 bg-[linear-gradient(45deg,_#27272a_25%,_transparent_25%),_linear-gradient(-45deg,_#27272a_25%,_transparent_25%),_linear-gradient(45deg,_transparent_75%,_#27272a_75%),_linear-gradient(-45deg,_transparent_75%,_#27272a_75%)] bg-[size:20px_20px]">
+                 <div className="relative flex-1 bg-zinc-950 min-h-0">
                     {generatedImage ? (
                         <ImageEditor
                             ref={editorRef}
@@ -2132,31 +2237,23 @@ export default function App() {
                             onZoomChange={setEditorZoom}
                         />
                     ) : (
-                        <div className={`w-full h-full flex items-center justify-center p-8 transition-colors ${dragTarget === 'main' ? 'bg-blue-500/10' : ''}`}>
-                            <div className="text-center text-zinc-500">
-                                {mode === 'create' ? (
-                                    <>
-                                        <Icons.Sparkles className="mx-auto text-6xl" />
-                                        <h2 className="mt-4 text-lg font-semibold text-zinc-400">Pronto para criar algo incrível?</h2>
-                                        <p className="mt-1 text-sm">Descreva sua ideia no painel à esquerda e clique em "Gerar".</p>
-                                    </>
-                                ) : (
-                                    <>
-                                         <input
-                                            type="file"
-                                            id="main-upload"
-                                            className="hidden"
-                                            accept="image/png, image/jpeg, image/webp"
-                                            onChange={(e) => handleImageUpload(e.target.files, 'main')}
-                                        />
-                                        <label htmlFor="main-upload" className="cursor-pointer group">
-                                            <Icons.UploadCloud className="mx-auto text-6xl group-hover:text-zinc-400 transition-colors" />
-                                            <h2 className="mt-4 text-lg font-semibold text-zinc-400">Comece a Editar</h2>
-                                            <p className="mt-1 text-sm">Arraste e solte uma imagem aqui, ou <span className="text-blue-400 font-semibold">clique para enviar</span>.</p>
-                                        </label>
-                                    </>
-                                )}
-                            </div>
+                        <div className="w-full h-full flex items-center justify-center p-8">
+                            {mode === 'create' ? (
+                                <div className="text-center text-zinc-500">
+                                    <Icons.Sparkles className="mx-auto text-6xl" />
+                                    <h2 className="mt-4 text-lg font-semibold text-zinc-400">Pronto para criar algo incrível?</h2>
+                                    <p className="mt-1 text-sm">Descreva sua ideia e clique em "Gerar".</p>
+                                </div>
+                            ) : (
+                                 <label htmlFor="main-upload" className="w-full h-full flex items-center justify-center border-2 border-dashed border-zinc-800 rounded-xl cursor-pointer group hover:border-blue-500 transition-colors bg-zinc-900/50 hover:bg-blue-500/5">
+                                     <input type="file" id="main-upload" className="hidden" accept="image/png, image/jpeg, image/webp" onChange={(e) => handleImageUpload(e.target.files, 'main')} />
+                                    <div className="text-center text-zinc-500">
+                                        <Icons.UploadCloud className="mx-auto text-6xl text-zinc-400 group-hover:text-blue-500 transition-colors" />
+                                        <h2 className="mt-4 text-lg font-semibold text-zinc-400">Comece a Editar</h2>
+                                        <p className="mt-1 text-sm">Arraste e solte uma imagem aqui, ou <span className="font-semibold text-blue-400">clique para enviar</span>.</p>
+                                    </div>
+                                </label>
+                            )}
                         </div>
                     )}
                     {isPlacingObject && (
@@ -2179,88 +2276,37 @@ export default function App() {
                         />
                     )}
                     
-                    {/* Floating Editor Controls */}
                     {mode === 'edit' && activeEditFunction === 'compose' && generatedImage && !isPlacingObject && (
                          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-zinc-900/80 backdrop-blur-sm p-2 rounded-lg shadow-lg flex items-center gap-4 ring-1 ring-white/10">
                             <div className="flex bg-zinc-800 p-1 rounded-md">
-                                <button onClick={() => setMaskTool('brush')} className={`p-2 rounded transition-colors ${maskTool === 'brush' ? 'bg-zinc-700' : 'hover:bg-zinc-700/50'}`} title="Pincel">
-                                    <Icons.Brush />
-                                </button>
-                                <button onClick={() => setMaskTool('eraser')} className={`p-2 rounded transition-colors ${maskTool === 'eraser' ? 'bg-zinc-700' : 'hover:bg-zinc-700/50'}`} title="Borracha">
-                                    <Icons.Eraser />
-                                </button>
+                                <button onClick={() => setMaskTool('brush')} className={`p-2 rounded transition-colors ${maskTool === 'brush' ? 'bg-zinc-700' : 'hover:bg-zinc-700/50'}`} title="Pincel"> <Icons.Brush /> </button>
+                                <button onClick={() => setMaskTool('eraser')} className={`p-2 rounded transition-colors ${maskTool === 'eraser' ? 'bg-zinc-700' : 'hover:bg-zinc-700/50'}`} title="Borracha"> <Icons.Eraser /> </button>
                             </div>
                             <div className="w-px h-8 bg-zinc-700" />
-                            <div className="flex items-center gap-3">
-                                <span className="text-sm">Tamanho</span>
-                                <Slider
-                                    value={brushSize} min={5} max={100}
-                                    onChange={(e) => setBrushSize(parseInt(e.target.value, 10))}
-                                    aria-label="Tamanho do Pincel"
-                                />
-                            </div>
+                            <div className="flex items-center gap-3"> <span className="text-sm">Tamanho</span> <Slider value={brushSize} min={5} max={100} onChange={(e) => setBrushSize(parseInt(e.target.value, 10))} aria-label="Tamanho do Pincel" sliderWidthClass="w-32" /> </div>
                              <div className="w-px h-8 bg-zinc-700" />
-                             <div className="flex items-center gap-3">
-                                 <span className="text-sm">Opacidade</span>
-                                 <Slider
-                                    value={maskOpacity * 100} min={10} max={100}
-                                    onChange={(e) => setMaskOpacity(parseInt(e.target.value, 10) / 100)}
-                                    aria-label="Opacidade da Máscara"
-                                />
-                             </div>
+                             <div className="flex items-center gap-3"> <span className="text-sm">Opacidade</span> <Slider value={maskOpacity * 100} min={10} max={100} onChange={(e) => setMaskOpacity(parseInt(e.target.value, 10) / 100)} aria-label="Opacidade da Máscara" sliderWidthClass="w-32" /> </div>
                              <div className="w-px h-8 bg-zinc-700" />
-                             <button onClick={() => editorRef.current?.clearMask()} className="p-2 hover:bg-zinc-700/50 rounded-md transition-colors" title="Limpar Seleção">
-                                 <Icons.Deselect />
-                             </button>
+                             <button onClick={() => editorRef.current?.clearMask()} className="p-2 hover:bg-zinc-700/50 rounded-md transition-colors" title="Limpar Seleção"> <Icons.Deselect /> </button>
                          </div>
                     )}
 
-                </div>
-                 {/* Upload Progress Bar */}
-                 {uploadProgress.length > 0 && (
-                     <div className="absolute bottom-0 left-0 right-0 p-4 space-y-2 z-40">
-                         {uploadProgress.map(up => (
-                             <div key={up.id} className="bg-zinc-800 p-3 rounded-lg shadow-lg">
-                                 <div className="flex justify-between items-center mb-1">
-                                     <span className="text-sm font-medium truncate pr-4">{up.name}</span>
-                                     {up.status === 'success' && <Icons.CheckCircle className="text-green-400" />}
-                                     {up.status === 'error' && <Icons.AlertCircle className="text-red-400" />}
-                                 </div>
-                                 {up.status === 'error' && <p className="text-xs text-red-400 mb-2">{up.message}</p>}
-                                 <div className="w-full bg-zinc-700 rounded-full h-1.5">
-                                     <div 
-                                        className={`h-1.5 rounded-full transition-all duration-300 ${
-                                            up.status === 'success' ? 'bg-green-500' : up.status === 'error' ? 'bg-red-500' : 'bg-blue-500'
-                                        }`} 
-                                        style={{ width: `${up.progress}%` }}
-                                     />
-                                 </div>
-                             </div>
-                         ))}
-                     </div>
-                 )}
-            </div>
-
-            {/* Right Panel */}
-            <div className="w-[250px] bg-zinc-900 p-4 flex flex-col border-l border-zinc-800">
-                <h2 className="text-sm font-semibold text-zinc-400 mb-3 flex items-center gap-2 flex-shrink-0"><Icons.History /> Histórico</h2>
-                <div className="flex-grow overflow-y-auto space-y-2 pr-2">
-                    {history.length === 0 ? (
-                        <p className="text-xs text-zinc-500 text-center py-4">Nenhuma ação registrada ainda.</p>
-                    ) : (
-                        history.map((entry, index) => (
-                            <button
-                                key={entry.id}
-                                onClick={() => handleHistoryNavigation(index)}
-                                className={`w-full flex items-center gap-3 p-2 rounded-md text-left transition-colors ${historyIndex === index ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}`}
-                            >
-                                <img src={entry.imageUrl} alt="" className="w-10 h-10 object-cover rounded-md flex-shrink-0 bg-zinc-700" />
-                                <div className="flex-1 min-w-0">
-                                    <p className="text-xs font-semibold truncate">{getHistoryEntryTitle(entry)}</p>
-                                    <p className="text-xs text-zinc-400 truncate">{entry.prompt || 'Imagem inicial'}</p>
+                    {uploadProgress.length > 0 && (
+                        <div className="absolute bottom-0 left-0 right-0 p-4 space-y-2 z-40">
+                            {uploadProgress.map(up => (
+                                <div key={up.id} className="bg-zinc-800 p-3 rounded-lg shadow-lg">
+                                    <div className="flex justify-between items-center mb-1">
+                                        <span className="text-sm font-medium truncate pr-4">{up.name}</span>
+                                        {up.status === 'success' && <Icons.CheckCircle className="text-green-400" />}
+                                        {up.status === 'error' && <Icons.AlertCircle className="text-red-400" />}
+                                    </div>
+                                    {up.status === 'error' && <p className="text-xs text-red-400 mb-2">{up.message}</p>}
+                                    <div className="w-full bg-zinc-700 rounded-full h-1.5">
+                                        <div className={`h-1.5 rounded-full transition-all duration-300 ${up.status === 'success' ? 'bg-green-500' : up.status === 'error' ? 'bg-red-500' : 'bg-blue-500'}`} style={{ width: `${up.progress}%` }} />
+                                    </div>
                                 </div>
-                            </button>
-                        )).reverse()
+                            ))}
+                        </div>
                     )}
                 </div>
             </div>
