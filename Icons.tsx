@@ -19,10 +19,8 @@ export const Type = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialI
 export const Comic = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="comic_bubble" {...props} />;
 export const AspectRatio = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="aspect_ratio" {...props} />;
 export const Sliders = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="tune" {...props} />;
-export const MagicWand = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="auto_fix_high" {...props} />;
-export const Palette = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="palette" {...props} />;
 export const Layers = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="layers" {...props} />;
-export const Contrast = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="contrast" {...props} />;
+export const Palette = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="palette" {...props} />;
 export const Prompt = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="edit_note" {...props} />;
 export const Reference = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="attachment" {...props} />;
 export const History = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="history" {...props} />;
@@ -37,6 +35,9 @@ export const AlertCircle = (props: React.HTMLAttributes<HTMLSpanElement>) => <Ma
 export const UploadCloud = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="cloud_upload" {...props} />;
 export const Select = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="interests" {...props} />;
 export const Selection = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="highlight_alt" {...props} />;
+export const ClearAll = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="delete_sweep" {...props} />;
+export const Settings = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="settings" {...props} />;
+export const Close = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="close" {...props} />;
 export const Loader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
     <div className={`flex justify-center items-center space-x-2 ${className || ''}`.trim()} {...props}>
       <div className="w-4 h-4 bg-blue-400 rounded-full animate-pulse-dots dot-1"></div>

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, ChangeEvent, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
+import React, { useState, useCallback, ChangeEvent, useEffect, useRef, useImperativeHandle, forwardRef, useMemo } from 'react';
 import type { Mode, CreateFunction, EditFunction, UploadedImage, HistoryEntry, UploadProgress, ReferenceImage } from './types';
 import { generateImage, processImagesWithPrompt } from './services/geminiService';
 import * as Icons from './Icons';
@@ -131,27 +131,6 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
         
         return [canvasX, canvasY];
     }, []);
-
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (!isSelectionEnabled) return;
-
-            if (e.key === '[') {
-                e.preventDefault();
-                // This will need to be lifted up if brushSize is controlled by parent.
-                // For now, let's assume parent will handle it.
-            } else if (e.key === ']') {
-                e.preventDefault();
-                // This will need to be lifted up if brushSize is controlled by parent.
-            }
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-
-        return () => {
-            window.removeEventListener('keydown', handleKeyDown);
-        };
-    }, [isSelectionEnabled]);
 
     const drawMiniMap = useCallback(() => {
         const miniMapCanvas = miniMapCanvasRef.current;
@@ -918,6 +897,26 @@ const ReferenceMaskEditor: React.FC<ReferenceMaskEditorProps> = ({ isOpen, image
         };
     }, [isOpen, imageSrc, clearMask]);
 
+    useEffect(() => {
+        if (!isOpen) return;
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            const step = 5;
+            if (e.key === '[') {
+                e.preventDefault();
+                setBrushSize(prev => Math.max(5, prev - step));
+            } else if (e.key === ']') {
+                e.preventDefault();
+                setBrushSize(prev => Math.min(150, prev + step));
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            window.removeEventListener('keydown',handleKeyDown);
+        };
+    }, [isOpen]);
+
     const startDrawing = (e: React.MouseEvent<HTMLDivElement>) => {
         setIsDrawing(true);
         const [x, y] = getCoords(e);
@@ -1157,9 +1156,10 @@ const ObjectPlacer = ({
     const handleMouseMove = (e: MouseEvent) => {
         if (!actionRef.current) return;
         const { action, startX, startY, startLeft, startTop, startWidth, startHeight, startRotation, startAngle, aspectRatio } = actionRef.current;
+        let newTransform = { ...placingObjectState.transform };
+
         const dx = e.clientX - startX;
         const dy = e.clientY - startY;
-        let newTransform = { ...placingObjectState.transform };
 
         switch(action) {
             case 'move':
@@ -1227,50 +1227,92 @@ const ObjectPlacer = ({
     );
 };
 
-
-function App() {
+export default function App() {
+    // Main state
     const [prompt, setPrompt] = useState<string>('');
     const [mode, setMode] = useState<Mode>('create');
-    const [activeCreateFunction, setActiveCreateFunction] = useState<CreateFunction>('free');
-    const [activeEditFunction, setActiveEditFunction] = useState<EditFunction>('compose');
-    const [aspectRatio, setAspectRatio] = useState<string>('1:1');
-    const [styleIntensity, setStyleIntensity] = useState<number>(3);
-    
-    const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
-
     const [history, setHistory] = useState<HistoryEntry[]>([]);
     const [historyIndex, setHistoryIndex] = useState<number>(-1);
-    const generatedImage = history[historyIndex]?.imageUrl ?? null;
+    
+    // Create mode state
+    const [activeCreateFunction, setActiveCreateFunction] = useState<CreateFunction>('free');
+    const [aspectRatio, setAspectRatio] = useState<string>('1:1');
+    const [negativePrompt, setNegativePrompt] = useState<string>('');
+    const [styleModifier, setStyleModifier] = useState<string>('default');
+    const [cameraAngle, setCameraAngle] = useState<string>('default');
+    const [lightingStyle, setLightingStyle] = useState<string>('default');
 
+    // Edit mode state
+    const [activeEditFunction, setActiveEditFunction] = useState<EditFunction>('compose');
+    const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
+    const [styleStrength, setStyleStrength] = useState<number>(75);
+
+    // UI & Loading state
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
-    
     const [showMobileModal, setShowMobileModal] = useState<boolean>(false);
-    const editorRef = useRef<ImageEditorRef>(null);
-    const mainContentRef = useRef<HTMLDivElement>(null);
-
     const [isDragging, setIsDragging] = useState<boolean>(false);
     const [dragTarget, setDragTarget] = useState<'main' | 'reference' | null>(null);
     const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([]);
+    
+    // Dialogs & Modals state
+    const [confirmationDialog, setConfirmationDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+    const [editingReferenceIndex, setEditingReferenceIndex] = useState<number | null>(null);
 
-    const [confirmationDialog, setConfirmationDialog] = useState({
-        isOpen: false,
-        title: '',
-        message: '',
-        onConfirm: () => {},
-    });
-
+    // Editor-specific state
     const [maskTool, setMaskTool] = useState<'brush' | 'eraser'>('brush');
     const [brushSize, setBrushSize] = useState(40);
     const [maskOpacity, setMaskOpacity] = useState(0.6);
     const [editorZoom, setEditorZoom] = useState(100);
-    
-    const [editingReferenceIndex, setEditingReferenceIndex] = useState<number | null>(null);
-
     const [isPlacingObject, setIsPlacingObject] = useState<boolean>(false);
     const [placingObjectState, setPlacingObjectState] = useState<any>(null);
+    
+    // Refs
+    const editorRef = useRef<ImageEditorRef>(null);
+    const mainContentRef = useRef<HTMLDivElement>(null);
 
+    const generatedImage = history[historyIndex]?.imageUrl ?? null;
 
+    const styleOptions: Record<CreateFunction, { value: string, label: string }[]> = {
+        free: [],
+        sticker: [
+            { value: 'cartoon', label: 'Desenho' },
+            { value: 'vintage', label: 'Vintage' },
+            { value: 'holographic', label: 'Holográfico' },
+            { value: 'embroidered patch', label: 'Bordado' },
+        ],
+        text: [
+            { value: 'minimalist', label: 'Minimalista' },
+            { value: 'corporate', label: 'Corporativo' },
+            { value: 'playful', label: 'Divertido' },
+            { value: 'geometric', label: 'Geométrico' },
+        ],
+        comic: [
+            { value: 'American comic book', label: 'Americano' },
+            { value: 'Japanese manga', label: 'Mangá' },
+            { value: 'noir comic', label: 'Noir' },
+            { value: 'franco-belgian comics (bande dessinée)', label: 'Franco-Belga' },
+        ],
+    };
+
+    const cameraAngleOptions = [
+        { value: 'default', label: 'Padrão' },
+        { value: 'eye-level', label: 'Nível do Olhar' },
+        { value: 'close-up', label: 'Close-up' },
+        { value: 'low angle', label: 'Ângulo Baixo' },
+        { value: 'high angle (bird\'s-eye view)', label: 'Plano Alto' },
+        { value: 'wide shot (long shot)', label: 'Plano Geral' },
+    ];
+    
+    const lightingStyleOptions = [
+        { value: 'default', label: 'Padrão' },
+        { value: 'cinematic', label: 'Cinemática' },
+        { value: 'soft', label: 'Luz Suave' },
+        { value: 'dramatic', label: 'Dramática' },
+        { value: 'studio', label: 'Estúdio' },
+        { value: 'natural', label: 'Natural' },
+    ];
+    
     const closeConfirmationDialog = () => {
         setConfirmationDialog(prev => ({ ...prev, isOpen: false }));
     };
@@ -1279,6 +1321,35 @@ function App() {
         confirmationDialog.onConfirm();
         closeConfirmationDialog();
     };
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (mode !== 'edit' || activeEditFunction !== 'compose' || isPlacingObject || editingReferenceIndex !== null) {
+                return;
+            }
+
+            const activeEl = document.activeElement;
+            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+                return;
+            }
+
+            const step = 5;
+
+            if (e.key === '[') {
+                e.preventDefault();
+                setBrushSize(prev => Math.max(5, prev - step));
+            } else if (e.key === ']') {
+                e.preventDefault();
+                setBrushSize(prev => Math.min(100, prev + step));
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [mode, activeEditFunction, isPlacingObject, editingReferenceIndex]);
 
 
     const resetImages = () => {
@@ -1352,12 +1423,17 @@ function App() {
         } else { 
             setActiveEditFunction(entry.editFunction!);
             setReferenceImages(entry.referenceImages || []);
-            setStyleIntensity(entry.styleIntensity ?? 3);
+            if (entry.editFunction === 'style' && entry.styleStrength) {
+                setStyleStrength(entry.styleStrength);
+            }
         }
     }, [history]);
 
     const handleCreateFunctionClick = (func: CreateFunction) => {
         setActiveCreateFunction(func);
+        // Reset style modifier when function changes
+        const options = styleOptions[func];
+        setStyleModifier(options.length > 0 ? options[0].value : 'default');
     };
 
     const handleAspectRatioChange = (ratio: string) => {
@@ -1365,6 +1441,9 @@ function App() {
     };
 
     const handleEditFunctionClick = (func: EditFunction) => {
+        if (func !== activeEditFunction) {
+            setReferenceImages([]); // Clear references on function switch
+        }
         setActiveEditFunction(func);
     };
     
@@ -1374,6 +1453,12 @@ function App() {
 
         if (target === 'main' && filesToProcess.length > 1) {
             filesToProcess.splice(1);
+        }
+        
+        if (target === 'reference' && activeEditFunction === 'style') {
+            if (filesToProcess.length > 1) {
+                filesToProcess.splice(1);
+            }
         }
 
         filesToProcess.forEach((file, index) => {
@@ -1421,7 +1506,6 @@ function App() {
                         mode: 'edit',
                         editFunction: activeEditFunction,
                         referenceImages: [],
-                        styleIntensity: styleIntensity,
                     };
                     setHistory([initialEntry]);
                     setHistoryIndex(0);
@@ -1430,7 +1514,11 @@ function App() {
                     isMainImageSlotFilled = true;
                 } else {
                     const newRefImage: ReferenceImage = { image: uploadedImage, previewUrl: dataUrl, mask: null };
-                    setReferenceImages(prev => [...prev, newRefImage]);
+                    if (activeEditFunction === 'style') {
+                        setReferenceImages([newRefImage]);
+                    } else {
+                        setReferenceImages(prev => [...prev, newRefImage]);
+                    }
                 }
 
                 setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 1500);
@@ -1438,7 +1526,7 @@ function App() {
             
             reader.readAsDataURL(file);
         });
-    }, [history.length, activeEditFunction, styleIntensity]);
+    }, [history.length, activeEditFunction]);
 
     const handleImageUpload = useCallback((files: FileList | null, target: 'main' | 'reference') => {
         if (!files || files.length === 0 || mode !== 'edit') return;
@@ -1487,7 +1575,7 @@ function App() {
         e.stopPropagation();
         setIsDragging(false);
         setDragTarget(null);
-        if (mode === 'edit' && activeEditFunction === 'compose') {
+        if (mode === 'edit') {
             const files = e.dataTransfer.files;
             if (files && files.length > 0) {
                 handleImageUpload(files, target);
@@ -1545,7 +1633,7 @@ function App() {
         setPrompt(easterEggPrompt);
 
         try {
-            const result = await generateImage(easterEggPrompt, activeCreateFunction, aspectRatio);
+            const result = await generateImage(easterEggPrompt, 'free', aspectRatio, '', 'default', 'default', 'default');
 
             if (result) {
                 const newEntry: HistoryEntry = {
@@ -1585,7 +1673,7 @@ function App() {
         try {
             let result: string | null = null;
             if (mode === 'create') {
-                result = await generateImage(prompt, activeCreateFunction, aspectRatio);
+                result = await generateImage(prompt, activeCreateFunction, aspectRatio, negativePrompt, styleModifier, cameraAngle, lightingStyle);
             } else { 
                 if (!generatedImage) throw new Error("Imagem para edição não encontrada.");
                 
@@ -1595,7 +1683,7 @@ function App() {
                 const mainImageMimeType = generatedImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
                 const mainImage: UploadedImage = { base64: mainImageBase64, mimeType: mainImageMimeType };
 
-                result = await processImagesWithPrompt(prompt, mainImage, referenceImages, mask, activeEditFunction, originalSize, styleIntensity);
+                result = await processImagesWithPrompt(prompt, mainImage, referenceImages, mask, activeEditFunction, originalSize, styleStrength);
             }
 
             if (result) {
@@ -1609,7 +1697,7 @@ function App() {
                       : { 
                           editFunction: activeEditFunction, 
                           referenceImages,
-                          styleIntensity,
+                          styleStrength: activeEditFunction === 'style' ? styleStrength : undefined,
                         }),
                 };
         
@@ -1623,7 +1711,7 @@ function App() {
         } finally {
             setIsLoading(false);
         }
-    }, [prompt, mode, activeCreateFunction, activeEditFunction, aspectRatio, referenceImages, history, historyIndex, generatedImage, styleIntensity]);
+    }, [prompt, mode, activeCreateFunction, activeEditFunction, aspectRatio, referenceImages, history, historyIndex, generatedImage, styleStrength, negativePrompt, styleModifier, cameraAngle, lightingStyle]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -1650,7 +1738,7 @@ function App() {
 
     const handleRedo = () => {
         if (historyIndex < history.length - 1) {
-            handleHistoryNavigation(historyIndex - 1);
+            handleHistoryNavigation(historyIndex + 1);
         }
     };
 
@@ -1664,11 +1752,83 @@ function App() {
         document.body.removeChild(link);
     };
 
+    const performClearAll = () => {
+        setHistory([]);
+        setHistoryIndex(-1);
+        setPrompt('');
+        setMode('create');
+        setActiveCreateFunction('free');
+        setAspectRatio('1:1');
+        setReferenceImages([]);
+        setError(null);
+        setActiveEditFunction('compose');
+        setStyleStrength(75);
+        setMaskTool('brush');
+        setBrushSize(40);
+        setMaskOpacity(0.6);
+        setIsPlacingObject(false);
+        setPlacingObjectState(null);
+        setNegativePrompt('');
+        setStyleModifier('default');
+        setCameraAngle('default');
+        setLightingStyle('default');
+        editorRef.current?.clearMask();
+    };
+
+    const handleClearAll = () => {
+        if (history.length > 0) {
+            setConfirmationDialog({
+                isOpen: true,
+                title: 'Limpar Tudo?',
+                message: 'Tem certeza de que deseja limpar a imagem, as referências e o histórico? Esta ação não pode ser desfeita.',
+                onConfirm: performClearAll,
+            });
+        }
+    };
+
+    const finalPromptPreview = useMemo(() => {
+        if (mode !== 'create' || !prompt) return null;
+        
+        let basePrompt = prompt;
+        let styleDescription = '';
+
+        switch (activeCreateFunction) {
+            case 'sticker':
+                styleDescription = `A die-cut sticker of ${basePrompt}, ${styleModifier} style, with a thick white border, on a simple background.`;
+                break;
+            case 'text':
+                styleDescription = `A clean, vector-style logo featuring the text "${basePrompt}", ${styleModifier} design.`;
+                break;
+            case 'comic':
+                styleDescription = `A single comic book panel of ${basePrompt}, ${styleModifier} art style, vibrant colors, bold lines, dynamic action.`;
+                break;
+            case 'free':
+            default:
+                styleDescription = `A cinematic, photorealistic image of ${basePrompt}, hyper-detailed, 8K resolution.`;
+                break;
+        }
+
+        if (cameraAngle !== 'default') styleDescription += `, ${cameraAngle} shot`;
+        if (lightingStyle !== 'default' && activeCreateFunction === 'free') styleDescription += `, ${lightingStyle} lighting`;
+        
+        return styleDescription;
+    }, [mode, prompt, activeCreateFunction, styleModifier, cameraAngle, lightingStyle]);
+
     useEffect(() => {
         if (window.innerWidth < 1024) {
             setShowMobileModal(true);
         }
     }, []);
+    
+    useEffect(() => {
+        // Set default style modifier when function changes
+        const options = styleOptions[activeCreateFunction];
+        if (options.length > 0) {
+            setStyleModifier(options[0].value);
+        } else {
+            setStyleModifier('default');
+        }
+    }, [activeCreateFunction]);
     
     const getHistoryEntryTitle = (entry: HistoryEntry): string => {
         const functionNameMap: { [key: string]: string } = {
@@ -1676,8 +1836,8 @@ function App() {
             sticker: 'Adesivo',
             text: 'Logo',
             comic: 'Quadrinho',
-            style: 'Estilo',
             compose: 'Composição',
+            style: 'Estilo',
         };
     
         if (entry.mode === 'create') {
@@ -1757,345 +1917,353 @@ function App() {
                         </div>
                         <div>
                             <h2 className="text-sm font-semibold text-zinc-400 mb-3 flex items-center gap-2"><Icons.AspectRatio /> Proporção</h2>
-                            <div className="grid grid-cols-5 gap-2">
-                              {['1:1', '16:9', '9:16', '4:3', '3:4'].map(ratio => (
-                                <button key={ratio} onClick={() => handleAspectRatioChange(ratio)} className={`py-2 text-xs font-semibold rounded-md transition-colors ${aspectRatio === ratio ? 'bg-blue-500 text-white' : 'bg-zinc-800 hover:bg-zinc-700'}`}>{ratio}</button>
-                              ))}
+                            <div className="grid grid-cols-3 gap-2">
+                                {['1:1', '16:9', '9:16', '4:3', '3:4'].map(ratio => (
+                                    <button key={ratio} onClick={() => handleAspectRatioChange(ratio)} className={`p-2 border rounded-md transition-colors text-xs ${aspectRatio === ratio ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-zinc-700 bg-zinc-800 hover:bg-zinc-700/50'}`}>
+                                        {ratio}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        <div>
+                            <h2 className="text-sm font-semibold text-zinc-400 mb-3 flex items-center gap-2"><Icons.Settings /> Configurações Avançadas</h2>
+                            <div className="space-y-4">
+                                {styleOptions[activeCreateFunction].length > 0 && (
+                                    <div className="custom-select-wrapper">
+                                        <select value={styleModifier} onChange={(e) => setStyleModifier(e.target.value)} className="custom-select" aria-label="Modificador de estilo">
+                                            {styleOptions[activeCreateFunction].map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                        </select>
+                                    </div>
+                                )}
+                                {activeCreateFunction === 'free' && (
+                                    <>
+                                        <div className="custom-select-wrapper">
+                                            <select value={cameraAngle} onChange={(e) => setCameraAngle(e.target.value)} className="custom-select" aria-label="Ângulo da câmera">
+                                                {cameraAngleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="custom-select-wrapper">
+                                            <select value={lightingStyle} onChange={(e) => setLightingStyle(e.target.value)} className="custom-select" aria-label="Estilo de iluminação">
+                                                {lightingStyleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                            </select>
+                                        </div>
+                                    </>
+                                )}
+                                <textarea
+                                    value={negativePrompt}
+                                    onChange={(e) => setNegativePrompt(e.target.value)}
+                                    placeholder="Prompt Negativo (opcional): e.g., 'texto, marcas d'água'"
+                                    className="w-full bg-zinc-800 p-2 rounded-md text-sm placeholder-zinc-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                                    rows={2}
+                                />
+                                {finalPromptPreview && (
+                                    <div className="text-xs text-zinc-400 p-2 bg-zinc-800/50 rounded-md">
+                                        <p className="font-semibold mb-1">Prompt Final:</p>
+                                        <p>{finalPromptPreview}</p>
+                                    </div>
+                                )}
                             </div>
                         </div>
                       </>
                     )}
-
                     {mode === 'edit' && (
-                       <>
-                        <div>
-                            <h2 className="text-sm font-semibold text-zinc-400 mb-3 flex items-center gap-2"><Icons.Sliders /> Ferramentas de Edição</h2>
-                            <div className="grid grid-cols-2 gap-2">
-                                <FunctionButton data-function="style" isActive={activeEditFunction === 'style'} onClick={handleEditFunctionClick} icon={<Icons.Palette />} name="Estilo" />
-                                <FunctionButton data-function="compose" isActive={activeEditFunction === 'compose'} onClick={handleEditFunctionClick} icon={<Icons.Layers />} name="Composição" />
-                            </div>
-                        </div>
-                        {activeEditFunction === 'style' && (
-                            <div className="pt-2">
-                                <h3 className="text-sm font-semibold text-zinc-400 flex items-center gap-2 mb-3">
-                                    <Icons.Contrast /> Intensidade do Estilo
-                                </h3>
-                                <div className="flex items-center gap-4 px-1">
-                                    <input 
-                                        type="range" 
-                                        min="1" max="5" 
-                                        step="1" 
-                                        value={styleIntensity} 
-                                        onChange={e => setStyleIntensity(parseInt(e.target.value, 10))} 
-                                        className="w-full h-2 bg-zinc-700 rounded-lg appearance-none cursor-pointer"
-                                        aria-label="Intensidade do Estilo"
-                                    />
-                                    <span className="text-xs font-medium text-zinc-300 w-20 text-center">
-                                        {['Sutil', 'Leve', 'Médio', 'Forte', 'Intenso'][styleIntensity - 1]}
-                                    </span>
+                        <>
+                            <div>
+                                <h2 className="text-sm font-semibold text-zinc-400 mb-3 flex items-center gap-2"><Icons.Layers /> Função de Edição</h2>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <FunctionButton data-function="compose" isActive={activeEditFunction === 'compose'} onClick={handleEditFunctionClick} icon={<Icons.Layers />} name="Composição" />
+                                    <FunctionButton data-function="style" isActive={activeEditFunction === 'style'} onClick={handleEditFunctionClick} icon={<Icons.Palette />} name="Estilo" />
                                 </div>
                             </div>
-                        )}
-                        <div className="space-y-3">
-                            <h3 className="text-sm font-semibold text-zinc-400 flex items-center gap-2"><Icons.Reference /> Imagens de Referência</h3>
-                           <div 
-                            onDragEnter={(e) => handleDragEnter(e, 'reference')}
-                            onDragLeave={handleDragLeave}
-                            onDragOver={handleDragOver}
-                            onDrop={(e) => handleDrop(e, 'reference')}
-                            className={`p-4 border-2 border-dashed rounded-lg text-center transition-colors ${isDragging && dragTarget === 'reference' ? 'border-blue-500 bg-blue-500/10' : 'border-zinc-700 bg-transparent hover:border-zinc-600'}`}>
-                            <label htmlFor="image-upload-reference" className="cursor-pointer text-xs text-zinc-400">
-                               {history.length === 0 ? 'Envie a imagem principal e de referência aqui' : 'Envie imagens de referência'}<br/>
-                               <span className="text-zinc-500">(Max 10MB por imagem)</span>
-                            </label>
-                            <input id="image-upload-reference" type="file" multiple accept="image/*" onChange={(e) => handleImageUpload(e.target.files, 'reference')} className="hidden" />
-                          </div>
-                          {uploadProgress.length > 0 && (
-                            <div className="space-y-3 pt-2">
-                                <div className="space-y-2">
-                                    {uploadProgress.map(file => (
-                                        <div key={file.id}>
-                                            <div className="flex justify-between items-center text-xs text-zinc-400 mb-1">
-                                                <span className="truncate max-w-[200px]">{file.name}</span>
-                                                {file.status === 'uploading' && <span className="text-zinc-400">{file.progress}%</span>}
-                                                {file.status === 'success' && <Icons.CheckCircle className="text-green-500" />}
-                                                {file.status === 'error' && <Icons.AlertCircle className="text-red-500" />}
-                                            </div>
-                                            <div className={`w-full bg-zinc-800 rounded-full h-1.5 ${file.status === 'error' ? 'bg-red-500/30' : ''}`}>
-                                                <div 
-                                                    className={`h-1.5 rounded-full transition-all duration-300 ${file.status === 'error' ? 'bg-red-500' : 'bg-blue-500'}`}
-                                                    style={{ width: `${file.progress}%` }}
-                                                />
-                                            </div>
-                                            {file.status === 'error' && file.message && <p className="text-xs text-red-400 mt-1">{file.message}</p>}
+                            {activeEditFunction === 'style' && (
+                                <div>
+                                    <h2 className="text-sm font-semibold text-zinc-400 mb-3 flex items-center gap-2"><Icons.Sliders /> Intensidade do Estilo</h2>
+                                    <Slider
+                                        value={styleStrength}
+                                        min={10} max={100}
+                                        onChange={(e) => setStyleStrength(parseInt(e.target.value, 10))}
+                                        aria-label="Intensidade do estilo"
+                                        sliderWidthClass="w-full"
+                                    />
+                                </div>
+                            )}
+                            <div 
+                                onDragEnter={(e) => handleDragEnter(e, 'reference')}
+                                onDragLeave={handleDragLeave}
+                                onDragOver={handleDragOver}
+                                onDrop={(e) => handleDrop(e, 'reference')}
+                            >
+                                <h2 className="text-sm font-semibold text-zinc-400 mb-3 flex items-center gap-2"><Icons.Reference /> Imagens de Referência</h2>
+                                <div className={`p-4 border-2 border-dashed rounded-md transition-colors ${dragTarget === 'reference' ? 'border-blue-500 bg-blue-500/10' : 'border-zinc-700'}`}>
+                                    <input
+                                        type="file"
+                                        id="reference-upload"
+                                        className="hidden"
+                                        multiple
+                                        accept="image/png, image/jpeg, image/webp"
+                                        onChange={(e) => handleImageUpload(e.target.files, 'reference')}
+                                    />
+                                    <label htmlFor="reference-upload" className="cursor-pointer text-center block">
+                                        <Icons.UploadCloud className="mx-auto text-4xl text-zinc-500" />
+                                        <p className="text-xs mt-2">Arraste e solte ou clique para enviar</p>
+                                        {activeEditFunction === 'style' && <p className="text-xs text-zinc-500">(1 imagem de estilo)</p>}
+                                    </label>
+                                </div>
+                                <div className="mt-4 space-y-2">
+                                    {referenceImages.map((ref, index) => (
+                                        <div key={index} className="flex items-center gap-2 p-2 bg-zinc-800 rounded-md" draggable onDragStart={(e) => {
+                                            if (ref.maskedObjectPreviewUrl) {
+                                                e.dataTransfer.setData('ref-index', index.toString());
+                                            }
+                                        }}>
+                                            <img 
+                                                src={ref.maskedObjectPreviewUrl || ref.previewUrl} 
+                                                alt={`Reference ${index + 1}`} 
+                                                className={`w-10 h-10 object-cover rounded ${ref.maskedObjectPreviewUrl ? 'cursor-grab' : 'cursor-default'}`} 
+                                            />
+                                            <span className="text-xs flex-1 truncate">Referência {index + 1}</span>
+                                            {activeEditFunction === 'compose' && (
+                                                <button onClick={() => setEditingReferenceIndex(index)} className="p-1 hover:bg-zinc-700 rounded" title="Selecionar objeto">
+                                                    <Icons.Select />
+                                                </button>
+                                            )}
+                                            <button onClick={() => handleRemoveImage(index)} className="p-1 text-red-400 hover:bg-zinc-700 rounded" title="Remover">
+                                               <Icons.Close className="text-base" />
+                                            </button>
                                         </div>
                                     ))}
                                 </div>
                             </div>
-                          )}
-                          <div className="grid grid-cols-3 gap-2">
-                            {referenceImages.map((ref, index) => (
-                              <div key={index} className="relative group aspect-square bg-zinc-800/50 rounded">
-                                {ref.maskedObjectPreviewUrl && activeEditFunction === 'compose' ? (
-                                    <img 
-                                        src={ref.maskedObjectPreviewUrl} 
-                                        alt={`Masked object ${index}`} 
-                                        className="w-full h-full object-contain rounded cursor-grab"
-                                        draggable="true"
-                                        onDragStart={(e) => e.dataTransfer.setData('ref-index', index.toString())}
-                                    />
-                                ) : (
-                                    <img src={ref.previewUrl} alt={`Upload preview ${index}`} className="w-full h-full object-cover rounded" />
-                                )}
-                                <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
-
-                                {ref.mask && (
-                                    <div className="absolute top-1 left-1 bg-green-500/80 text-white rounded-full p-0.5" title="Elemento selecionado">
-                                        <Icons.CheckCircle className="w-4 h-4" style={{fontSize: '1rem'}} />
-                                    </div>
-                                )}
-
-                                <button onClick={() => handleRemoveImage(index)} className="absolute top-1 right-1 bg-black/60 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity z-10" title="Remover imagem">
-                                  &times;
-                                </button>
-                                
-                                {activeEditFunction === 'compose' && (
-                                    <button onClick={() => setEditingReferenceIndex(index)} className="absolute bottom-1 left-1/2 -translate-x-1/2 bg-zinc-900/80 backdrop-blur-sm text-white rounded-full px-2 py-1 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-all z-10 hover:bg-blue-600" title="Selecionar elemento">
-                                      <Icons.Select style={{fontSize: '1rem'}} />
-                                    </button>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                       </>
+                        </>
                     )}
+                </div>
 
-                    {history.length > 0 && (
-                        <div className="space-y-3 pt-2">
-                            <h3 className="text-sm font-semibold text-zinc-400 flex items-center gap-2"><Icons.History /> Histórico</h3>
-                            <div className="h-48 overflow-y-auto space-y-2 pr-2">
-                                {[...history].reverse().map((entry, revIndex) => {
-                                    const originalIndex = history.length - 1 - revIndex;
-                                    return (
-                                        <div 
-                                            key={entry.id} 
-                                            onClick={() => handleHistoryNavigation(originalIndex)}
-                                            className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all ${
-                                                originalIndex === historyIndex ? 'bg-zinc-700' : 'bg-zinc-800 hover:bg-zinc-700/70'
-                                            }`}
-                                        >
-                                            <img src={entry.imageUrl} alt="History thumbnail" className="w-12 h-12 object-cover rounded-md flex-shrink-0" />
-                                            <div className="flex-1 text-sm overflow-hidden">
-                                                <p className="font-semibold text-zinc-200">{getHistoryEntryTitle(entry)}</p>
-                                                <p className="text-zinc-400 truncate">{entry.prompt || (entry.mode === 'edit' ? 'Imagem base' : 'Sem prompt')}</p>
-                                            </div>
-                                        </div>
-                                    )
-                                })}
-                            </div>
+                {/* Prompt Textarea */}
+                <div className="flex-shrink-0 space-y-3">
+                     <div className="relative">
+                        <textarea
+                            value={prompt}
+                            onChange={(e) => setPrompt(e.target.value)}
+                            placeholder={
+                                mode === 'create'
+                                    ? 'Descreva sua ideia... (ex: um astronauta surfando em uma onda cósmica)'
+                                    : 'Descreva sua edição... (ex: adicione um chapéu de pirata no gato)'
+                            }
+                            className="w-full bg-zinc-800 p-3 rounded-md text-sm placeholder-zinc-500 focus:ring-1 focus:ring-blue-500 focus:outline-none resize-none pr-10"
+                            rows={4}
+                            aria-label="Prompt principal"
+                        />
+                         <Icons.Prompt className="absolute top-3 right-3 text-zinc-500" />
+                    </div>
+                    <button
+                        onClick={generateImageHandler}
+                        disabled={isLoading}
+                        className="w-full bg-blue-600 text-white font-semibold py-3 px-4 rounded-md hover:bg-blue-500 transition-colors flex items-center justify-center disabled:bg-zinc-700 disabled:cursor-not-allowed"
+                    >
+                        {isLoading ? <Icons.Loader /> : 'Gerar (Ctrl+Enter)'}
+                    </button>
+                    {error && (
+                        <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm p-3 rounded-md flex items-start gap-2">
+                            <Icons.AlertCircle className="mt-0.5" />
+                            <span>{error}</span>
                         </div>
                     )}
                 </div>
             </div>
 
             {/* Main Content */}
-            <div className="flex-1 bg-zinc-950 flex flex-col min-w-0">
-                {/* Top Bar */}
-                <div className="h-14 flex-shrink-0 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between px-6 z-10">
-                    <div className="flex items-center gap-2">
-                        <h1 className="text-md font-bold text-zinc-100">Nano Banana Studio</h1>
-                         <span className="bg-zinc-800 text-zinc-300 text-xs font-semibold px-2 py-0.5 rounded-full">Beta</span>
+            <div 
+                ref={mainContentRef}
+                className="flex-1 flex flex-col bg-zinc-950" 
+                onDragEnter={(e) => handleDragEnter(e, 'main')}
+                onDragLeave={handleDragLeave}
+                onDragOver={handleDragOver}
+                onDrop={handleMainCanvasDrop}
+            >
+                {/* Top Toolbar */}
+                <div className="flex-shrink-0 h-12 bg-zinc-900 flex items-center justify-between px-4 border-b border-zinc-800">
+                    <div className="flex items-center gap-4">
+                        <button onClick={handleUndo} disabled={isUndoDisabled} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Desfazer (Ctrl+Z)">
+                            <Icons.Undo />
+                        </button>
+                        <button onClick={handleRedo} disabled={isRedoDisabled} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Refazer (Ctrl+Y)">
+                            <Icons.Redo />
+                        </button>
+                        <div className="w-px h-6 bg-zinc-700" />
+                         <button onClick={handleClearAll} className="p-2 hover:bg-zinc-800 rounded-md" title="Limpar Tudo">
+                            <Icons.ClearAll />
+                        </button>
                     </div>
                      <div className="flex items-center gap-2">
-                        <button onClick={handleSaveImage} disabled={!generatedImage} className="bg-zinc-800 px-3 py-1.5 text-sm font-semibold rounded-md hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"><Icons.Save /> Salvar</button>
-                        <button onClick={handleUndo} disabled={isUndoDisabled} className="bg-zinc-800 px-3 py-1.5 text-sm font-semibold rounded-md hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"><Icons.Undo /> Desfazer</button>
-                        <button onClick={handleRedo} disabled={isRedoDisabled} className="bg-zinc-800 px-3 py-1.5 text-sm font-semibold rounded-md hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"><Icons.Redo /> Refazer</button>
+                        <span className="text-sm">{Math.round(editorZoom)}%</span>
+                         <button onClick={() => editorRef.current?.zoomOut()} className="p-2 hover:bg-zinc-800 rounded-md" title="Diminuir Zoom">
+                             <Icons.ZoomOut />
+                         </button>
+                         <Slider 
+                            value={editorZoom}
+                            min={20}
+                            max={500}
+                            onChange={(e) => editorRef.current?.setZoom(parseInt(e.target.value, 10))}
+                            aria-label="Zoom do editor"
+                         />
+                         <button onClick={() => editorRef.current?.zoomIn()} className="p-2 hover:bg-zinc-800 rounded-md" title="Aumentar Zoom">
+                             <Icons.ZoomIn />
+                         </button>
+                         <button onClick={() => editorRef.current?.zoomToFit()} className="p-2 hover:bg-zinc-800 rounded-md" title="Ajustar à Tela">
+                             <Icons.FitScreen />
+                         </button>
+                     </div>
+                    <div className="flex items-center gap-4">
+                        <button onClick={handleSaveImage} disabled={!generatedImage} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Salvar Imagem">
+                            <Icons.Save />
+                        </button>
                     </div>
                 </div>
-                
                 {/* Canvas Area */}
-                <div className="flex-1 relative min-h-0">
-                    <div ref={mainContentRef} 
-                         className="absolute inset-0 flex items-start justify-center p-8"
-                         onDragOver={handleDragOver}
-                         onDrop={handleMainCanvasDrop}
-                         onDragEnter={(e) => handleDragEnter(e, 'main')}
-                         onDragLeave={handleDragLeave}
-                         >
-                        {generatedImage ? (
-                            <ImageEditor 
-                                ref={editorRef} 
-                                src={generatedImage}
-                                isSelectionEnabled={mode === 'edit' && !isPlacingObject}
-                                maskTool={maskTool}
-                                brushSize={brushSize}
-                                maskOpacity={maskOpacity}
-                                onZoomChange={setEditorZoom}
-                            />
-                        ) : (
-                            <div className="w-full max-w-6xl h-[700px]">
-                                <div 
-                                    className={`w-full h-full flex items-center justify-center transition-colors rounded-xl ${
-                                    isDragging && dragTarget === 'main' ? 'bg-zinc-900/50 border-2 border-dashed border-blue-500' : 'border-2 border-dashed border-zinc-700'
-                                    }`}>
-                                    <label htmlFor="image-upload-main" className="cursor-pointer text-center text-zinc-500 p-8">
-                                        <div className="mb-4">
-                                        <Icons.UploadCloud className="mx-auto text-zinc-600 w-16 h-16" />
-                                        </div>
-                                        <h2 className="text-xl font-semibold text-zinc-300">
-                                        {mode === 'create' ? 'Sua Arte Começa Aqui' : 'Arraste uma Imagem para Editar'}
-                                        </h2>
-                                        <p className="max-w-xs mt-2 text-zinc-400 text-sm">
-                                            {mode === 'create' 
-                                                ? 'Use o painel à esquerda para configurar e o campo abaixo para descrever sua visão.'
-                                                : 'Arraste e solte uma imagem aqui ou use o painel à esquerda para começar.'
-                                            }
-                                        </p>
-                                        <input id="image-upload-main" type="file" accept="image/*" onChange={(e) => mode === 'edit' && handleImageUpload(e.target.files, 'main')} className="hidden" />
-                                    </label>
-                                </div>
+                 <div className="flex-1 relative bg-zinc-950/80 bg-[linear-gradient(45deg,_#27272a_25%,_transparent_25%),_linear-gradient(-45deg,_#27272a_25%,_transparent_25%),_linear-gradient(45deg,_transparent_75%,_#27272a_75%),_linear-gradient(-45deg,_transparent_75%,_#27272a_75%)] bg-[size:20px_20px]">
+                    {generatedImage ? (
+                        <ImageEditor
+                            ref={editorRef}
+                            src={generatedImage}
+                            isSelectionEnabled={mode === 'edit' && activeEditFunction === 'compose' && !isPlacingObject}
+                            maskTool={maskTool}
+                            brushSize={brushSize}
+                            maskOpacity={maskOpacity}
+                            onZoomChange={setEditorZoom}
+                        />
+                    ) : (
+                        <div className={`w-full h-full flex items-center justify-center p-8 transition-colors ${dragTarget === 'main' ? 'bg-blue-500/10' : ''}`}>
+                            <div className="text-center text-zinc-500">
+                                {mode === 'create' ? (
+                                    <>
+                                        <Icons.Sparkles className="mx-auto text-6xl" />
+                                        <h2 className="mt-4 text-lg font-semibold text-zinc-400">Pronto para criar algo incrível?</h2>
+                                        <p className="mt-1 text-sm">Descreva sua ideia no painel à esquerda e clique em "Gerar".</p>
+                                    </>
+                                ) : (
+                                    <>
+                                         <input
+                                            type="file"
+                                            id="main-upload"
+                                            className="hidden"
+                                            accept="image/png, image/jpeg, image/webp"
+                                            onChange={(e) => handleImageUpload(e.target.files, 'main')}
+                                        />
+                                        <label htmlFor="main-upload" className="cursor-pointer group">
+                                            <Icons.UploadCloud className="mx-auto text-6xl group-hover:text-zinc-400 transition-colors" />
+                                            <h2 className="mt-4 text-lg font-semibold text-zinc-400">Comece a Editar</h2>
+                                            <p className="mt-1 text-sm">Arraste e solte uma imagem aqui, ou <span className="text-blue-400 font-semibold">clique para enviar</span>.</p>
+                                        </label>
+                                    </>
+                                )}
                             </div>
-                        )}
-                        {isPlacingObject && (
-                            <ObjectPlacer 
-                                placingObjectState={placingObjectState}
-                                onTransformChange={(newTransform: any) => setPlacingObjectState((prev: any) => ({ ...prev, transform: newTransform }))}
-                                onConfirm={() => {
-                                    editorRef.current?.stampObjectOnMask({ 
-                                        previewUrl: placingObjectState.previewUrl,
-                                        transform: { placerTransform: placingObjectState.transform },
-                                        maskOpacity,
-                                    });
-                                    setIsPlacingObject(false);
-                                    setPlacingObjectState(null);
-                                }}
-                                onCancel={() => {
-                                    setIsPlacingObject(false);
-                                    setPlacingObjectState(null);
-                                }}
-                            />
-                        )}
-                         {isLoading && (
-                            <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center z-40 transition-opacity duration-300" aria-live="polite">
-                                <Icons.Loader className="w-24 h-24 text-blue-400" />
-                                <p className="text-zinc-300 font-semibold text-lg mt-6">
-                                    {mode === 'create' ? 'Criando sua obra de arte...' : 'Aplicando magia na sua imagem...'}
-                                </p>
-                                <p className="text-zinc-400 text-sm mt-1">
-                                    {mode === 'create' ? 'Isso pode demorar um pouco.' : 'Isso pode levar alguns instantes.'}
-                                </p>
+                        </div>
+                    )}
+                    {isPlacingObject && (
+                        <ObjectPlacer 
+                            placingObjectState={placingObjectState}
+                            onTransformChange={(newTransform: any) => setPlacingObjectState((prev: any) => ({ ...prev, transform: newTransform }))}
+                            onConfirm={() => {
+                                editorRef.current?.stampObjectOnMask({
+                                    previewUrl: placingObjectState.previewUrl,
+                                    transform: { placerTransform: placingObjectState.transform },
+                                    maskOpacity: 1
+                                });
+                                setIsPlacingObject(false);
+                                setPlacingObjectState(null);
+                            }}
+                            onCancel={() => {
+                                setIsPlacingObject(false);
+                                setPlacingObjectState(null);
+                            }}
+                        />
+                    )}
+                    
+                    {/* Floating Editor Controls */}
+                    {mode === 'edit' && activeEditFunction === 'compose' && generatedImage && !isPlacingObject && (
+                         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-zinc-900/80 backdrop-blur-sm p-2 rounded-lg shadow-lg flex items-center gap-4 ring-1 ring-white/10">
+                            <div className="flex bg-zinc-800 p-1 rounded-md">
+                                <button onClick={() => setMaskTool('brush')} className={`p-2 rounded transition-colors ${maskTool === 'brush' ? 'bg-zinc-700' : 'hover:bg-zinc-700/50'}`} title="Pincel">
+                                    <Icons.Brush />
+                                </button>
+                                <button onClick={() => setMaskTool('eraser')} className={`p-2 rounded transition-colors ${maskTool === 'eraser' ? 'bg-zinc-700' : 'hover:bg-zinc-700/50'}`} title="Borracha">
+                                    <Icons.Eraser />
+                                </button>
                             </div>
-                        )}
-                    </div>
-                </div>
-
-                {/* Editor Controls Bar */}
-                {generatedImage && mode === 'edit' && !isPlacingObject && (
-                    <div className="flex-shrink-0 bg-zinc-900/95 backdrop-blur-sm border-t border-zinc-800 px-6 py-2 flex items-center justify-between gap-6">
-                        {/* Left Group */}
-                        <div className="flex items-center gap-6">
-                            {/* Selection Tools Sub-Group */}
+                            <div className="w-px h-8 bg-zinc-700" />
                             <div className="flex items-center gap-3">
-                                <div className="flex items-center gap-2">
-                                   <Icons.Selection className="text-zinc-400" />
-                                    <span className="text-sm font-semibold text-zinc-300">Seleção:</span>
-                                </div>
-                                <div className="flex bg-zinc-800 p-1 rounded-md">
-                                    <button onClick={() => setMaskTool('brush')} title="Pincel (B)" className={`p-1.5 rounded transition-colors ${maskTool === 'brush' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:bg-zinc-700/50'}`}>
-                                        <Icons.Brush />
-                                    </button>
-                                    <button onClick={() => setMaskTool('eraser')} title="Borracha (E)" className={`p-1.5 rounded transition-colors ${maskTool === 'eraser' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:bg-zinc-700/50'}`}>
-                                        <Icons.Eraser />
-                                    </button>
-                                    <button onClick={() => editorRef.current?.clearMask()} className="p-1.5 rounded text-zinc-400 hover:bg-zinc-700/50 transition-colors" title="Limpar Seleção (Esc)">
-                                        <Icons.Deselect />
-                                    </button>
-                                </div>
-                            </div>
-                            {/* Sliders Sub-Group */}
-                            <div className="flex items-center gap-4">
+                                <span className="text-sm">Tamanho</span>
                                 <Slider
-                                    label="Tamanho"
-                                    value={brushSize}
-                                    min={5} max={100}
-                                    onChange={e => {
-                                        setBrushSize(parseInt(e.target.value, 10));
-                                    }}
-                                    aria-label="Tamanho do pincel"
-                                />
-                                <Slider
-                                    label="Opacidade"
-                                    value={maskOpacity}
-                                    min={0.1} max={1} step={0.05}
-                                    onChange={e => {
-                                        setMaskOpacity(parseFloat(e.target.value));
-                                    }}
-                                    aria-label="Opacidade da máscara"
+                                    value={brushSize} min={5} max={100}
+                                    onChange={(e) => setBrushSize(parseInt(e.target.value, 10))}
+                                    aria-label="Tamanho do Pincel"
                                 />
                             </div>
-                        </div>
+                             <div className="w-px h-8 bg-zinc-700" />
+                             <div className="flex items-center gap-3">
+                                 <span className="text-sm">Opacidade</span>
+                                 <Slider
+                                    value={maskOpacity * 100} min={10} max={100}
+                                    onChange={(e) => setMaskOpacity(parseInt(e.target.value, 10) / 100)}
+                                    aria-label="Opacidade da Máscara"
+                                />
+                             </div>
+                             <div className="w-px h-8 bg-zinc-700" />
+                             <button onClick={() => editorRef.current?.clearMask()} className="p-2 hover:bg-zinc-700/50 rounded-md transition-colors" title="Limpar Seleção">
+                                 <Icons.Deselect />
+                             </button>
+                         </div>
+                    )}
 
-                        {/* Right Group */}
-                        <div className="flex items-center gap-4">
-                            {/* Zoom Sub-Group */}
-                            <div className="flex items-center gap-2">
-                                <button onClick={() => editorRef.current?.zoomOut()} title="Diminuir Zoom" className="p-1 rounded text-zinc-400 hover:bg-zinc-800 transition-colors">
-                                    <Icons.ZoomOut />
-                                </button>
-                                <Slider
-                                    value={editorZoom}
-                                    min={20} max={500}
-                                    onChange={e => editorRef.current?.setZoom(parseInt(e.target.value, 10))}
-                                    aria-label="Zoom slider"
-                                    sliderWidthClass="w-32"
-                                />
-                                <button onClick={() => editorRef.current?.zoomIn()} title="Aumentar Zoom" className="p-1 rounded text-zinc-400 hover:bg-zinc-800 transition-colors">
-                                    <Icons.ZoomIn />
-                                </button>
-                                <span className="text-sm font-semibold text-zinc-300 min-w-[40px] text-center" title="Zoom Atual">
-                                    {Math.round(editorZoom)}%
-                                </span>
-                            </div>
-                            {/* Divider */}
-                            <div className="h-6 w-px bg-zinc-700"></div>
-                            {/* Fit Screen Sub-Group */}
-                            <button onClick={() => editorRef.current?.zoomToFit()} title="Ajustar à Tela" className="p-1 rounded text-zinc-400 hover:bg-zinc-800 transition-colors">
-                                <Icons.FitScreen />
-                            </button>
-                        </div>
-                    </div>
-                )}
-                
-                {/* Bottom Prompt Bar */}
-                <div className="flex-shrink-0 p-4 bg-zinc-950 border-t border-zinc-800">
-                    <div className="w-full max-w-4xl mx-auto">
-                         {error && (
-                            <div className="mb-3 p-3 bg-red-500/10 border border-red-500/20 rounded-md flex items-start space-x-3" role="alert">
-                                <Icons.AlertCircle className="text-red-400 text-xl mt-0.5 flex-shrink-0" aria-hidden="true" />
-                                <p className="text-sm text-red-300">{error}</p>
-                            </div>
-                        )}
-                        <div className="relative">
-                            <textarea
-                                value={prompt}
-                                onChange={(e) => setPrompt(e.target.value)}
-                                placeholder={mode === 'create' ? "Um astronauta surfando em uma onda cósmica, estilo van gogh..." : "Selecione uma área na imagem e descreva a alteração: ex. adicione óculos de sol..."}
-                                className="w-full h-20 p-4 pr-32 bg-zinc-800 rounded-md text-zinc-200 placeholder-zinc-500 border border-zinc-700 focus:ring-2 focus:ring-blue-500 focus:outline-none transition resize-none"
-                            />
-                             <button
-                                onClick={generateImageHandler}
-                                disabled={isLoading || isPlacingObject}
-                                className="absolute right-4 top-1/2 -translate-y-1/2 px-5 py-2.5 bg-blue-600 text-white font-bold rounded-md hover:bg-blue-500 transition-all duration-200 disabled:bg-zinc-700 disabled:text-zinc-400 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-blue-600/10 hover:shadow-xl hover:shadow-blue-500/20"
+                </div>
+                 {/* Upload Progress Bar */}
+                 {uploadProgress.length > 0 && (
+                     <div className="absolute bottom-0 left-0 right-0 p-4 space-y-2 z-40">
+                         {uploadProgress.map(up => (
+                             <div key={up.id} className="bg-zinc-800 p-3 rounded-lg shadow-lg">
+                                 <div className="flex justify-between items-center mb-1">
+                                     <span className="text-sm font-medium truncate pr-4">{up.name}</span>
+                                     {up.status === 'success' && <Icons.CheckCircle className="text-green-400" />}
+                                     {up.status === 'error' && <Icons.AlertCircle className="text-red-400" />}
+                                 </div>
+                                 {up.status === 'error' && <p className="text-xs text-red-400 mb-2">{up.message}</p>}
+                                 <div className="w-full bg-zinc-700 rounded-full h-1.5">
+                                     <div 
+                                        className={`h-1.5 rounded-full transition-all duration-300 ${
+                                            up.status === 'success' ? 'bg-green-500' : up.status === 'error' ? 'bg-red-500' : 'bg-blue-500'
+                                        }`} 
+                                        style={{ width: `${up.progress}%` }}
+                                     />
+                                 </div>
+                             </div>
+                         ))}
+                     </div>
+                 )}
+            </div>
+
+            {/* Right Panel */}
+            <div className="w-[250px] bg-zinc-900 p-4 flex flex-col border-l border-zinc-800">
+                <h2 className="text-sm font-semibold text-zinc-400 mb-3 flex items-center gap-2 flex-shrink-0"><Icons.History /> Histórico</h2>
+                <div className="flex-grow overflow-y-auto space-y-2 pr-2">
+                    {history.length === 0 ? (
+                        <p className="text-xs text-zinc-500 text-center py-4">Nenhuma ação registrada ainda.</p>
+                    ) : (
+                        history.map((entry, index) => (
+                            <button
+                                key={entry.id}
+                                onClick={() => handleHistoryNavigation(index)}
+                                className={`w-full flex items-center gap-3 p-2 rounded-md text-left transition-colors ${historyIndex === index ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}`}
                             >
-                                {isLoading ? 'Gerando...' : 'Gerar'}
+                                <img src={entry.imageUrl} alt="" className="w-10 h-10 object-cover rounded-md flex-shrink-0 bg-zinc-700" />
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-semibold truncate">{getHistoryEntryTitle(entry)}</p>
+                                    <p className="text-xs text-zinc-400 truncate">{entry.prompt || 'Imagem inicial'}</p>
+                                </div>
                             </button>
-                        </div>
-                    </div>
+                        )).reverse()
+                    )}
                 </div>
             </div>
         </div>
     );
 }
-
-export default App;

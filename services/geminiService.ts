@@ -20,33 +20,52 @@ export const fileToBase64 = (file: File): Promise<UploadedImage> => {
   });
 };
 
-export const generateImage = async (prompt: string, createFunction: string, aspectRatio: string): Promise<string> => {
-    let finalPrompt = prompt;
+export const generateImage = async (
+    prompt: string, 
+    createFunction: string, 
+    aspectRatio: string,
+    negativePrompt: string,
+    styleModifier: string,
+    cameraAngle: string,
+    lightingStyle: string
+): Promise<string> => {
+    let basePrompt = prompt;
+    let styleDescription = '';
+
     switch (createFunction) {
         case 'sticker':
-            finalPrompt = `A cute die-cut sticker of ${prompt}, cartoon style, with a thick white border, on a white background.`;
+            styleDescription = `A die-cut sticker of ${basePrompt}, ${styleModifier} style, with a thick white border, on a simple background.`;
             break;
         case 'text':
-            finalPrompt = `A clean, modern, vector-style logo featuring the text "${prompt}". Minimalist design, high contrast, suitable for a tech company.`;
+             styleDescription = `A clean, vector-style logo featuring the text "${basePrompt}", ${styleModifier} design.`;
             break;
         case 'comic':
-            finalPrompt = `A single comic book panel of ${prompt}, American comic book art style, vibrant colors, bold lines, dynamic action.`;
+             styleDescription = `A single comic book panel of ${basePrompt}, ${styleModifier} art style, vibrant colors, bold lines, dynamic action.`;
             break;
         case 'free':
         default:
-             finalPrompt = `A cinematic, photorealistic image of ${prompt}, hyper-detailed, 8K resolution.`;
+             styleDescription = `A cinematic, photorealistic image of ${basePrompt}, hyper-detailed, 8K resolution.`;
             break;
+    }
+    
+    // Append camera and lighting modifiers if they are not 'default'
+    if (cameraAngle !== 'default') {
+        styleDescription += `, ${cameraAngle} shot`;
+    }
+    if (lightingStyle !== 'default') {
+        styleDescription += `, ${lightingStyle} lighting`;
     }
 
     let response;
     try {
         response = await ai.models.generateImages({
             model: 'imagen-4.0-generate-001',
-            prompt: finalPrompt,
+            prompt: styleDescription,
             config: {
                 numberOfImages: 1,
                 outputMimeType: 'image/png',
                 aspectRatio: aspectRatio,
+                ...(negativePrompt && { negativePrompt }),
             },
         });
     } catch (e: any) {
@@ -71,82 +90,101 @@ export const processImagesWithPrompt = async (
     mask: UploadedImage | null,
     editFunction: EditFunction,
     originalSize: { width: number, height: number } | null,
-    styleIntensity?: number
+    styleStrength: number
 ): Promise<string> => {
     const parts = [];
+    
+    const dimensionInstruction = originalSize
+        ? `**CRITICAL RULE**: The output image MUST have the exact same dimensions as the original image: ${originalSize.width}px by ${originalSize.height}px. Do NOT crop, resize, or change the aspect ratio. The entire scene from the original image must be present in the final output, just with the edits applied.`
+        : '';
+        
+    let finalPrompt: string;
 
-    // 1. Add the main image
-    parts.push({
-        inlineData: { data: mainImage.base64, mimeType: mainImage.mimeType }
-    });
-
-    // 2. Add the main image mask immediately after the main image
-    if (mask) {
+    if (editFunction === 'style') {
+        if (referenceImages.length === 0) {
+            throw new Error("Por favor, adicione uma imagem de referência de estilo.");
+        }
+        
+        // 1. Add the main image (content)
         parts.push({
-            inlineData: { data: mask.base64, mimeType: mask.mimeType }
+            inlineData: { data: mainImage.base64, mimeType: mainImage.mimeType }
         });
-    }
-
-    // 3. Add any reference images and their corresponding masks
-    referenceImages.forEach(ref => {
+        
+        // 2. Add the style reference image
+        const styleImage = referenceImages[0];
         parts.push({
-            inlineData: { data: ref.image.base64, mimeType: ref.image.mimeType }
+            inlineData: { data: styleImage.image.base64, mimeType: styleImage.image.mimeType }
         });
-        if (ref.mask) {
+
+        const userRequest = prompt || "Aplique o estilo da imagem de referência à imagem de conteúdo.";
+
+        finalPrompt = `
+${dimensionInstruction}
+
+**OPERATION: High-Fidelity Style Transfer**
+
+**INPUTS:**
+- **Image 1 (CONTENT_IMAGE):** The primary image whose content and composition must be preserved.
+- **Image 2 (STYLE_IMAGE):** The reference image providing the artistic style.
+
+**PRIMARY DIRECTIVE:** Your task is to perform a high-fidelity style transfer. You must meticulously analyze the STYLE_IMAGE and replicate its artistic DNA onto the CONTENT_IMAGE. The final output must look as if the content of the CONTENT_IMAGE was originally created by the same artist or method that produced the STYLE_IMAGE.
+
+**STYLE ANALYSIS (CRITICAL):**
+Analyze the STYLE_IMAGE for the following elements. This is not just about color, but the entire artistic medium and execution.
+- **Medium Emulation:** Is it a photograph, an oil painting, a watercolor, a 3D render, a charcoal sketch, a vector illustration, a comic book panel, pixel art, etc.? Replicate the fundamental properties of this medium.
+- **Texture & Brushwork:** Observe and replicate any canvas texture, paper grain, paint strokes, ink lines, digital noise, or rendering artifacts.
+- **Color Palette & Grading:** Extract the exact color palette, including saturation, contrast, and overall color grading.
+- **Lighting & Shading:** Analyze the lighting model. Is it soft and diffused, or harsh with dramatic shadows? Replicate the quality and direction of light and how it interacts with surfaces.
+- **Compositional Elements:** While preserving the CONTENT_IMAGE's composition, incorporate stylistic compositional traits from the STYLE_IMAGE if applicable (e.g., film grain, lens flares, specific focus effects).
+
+**STYLE STRENGTH MODULATION (${styleStrength}%):**
+The user has set the style strength to ${styleStrength}%. This dictates your adherence to the STYLE_IMAGE's aesthetic.
+- **At 100%:** You must perform a *total stylistic transformation*. The output should be indistinguishable in style from the STYLE_IMAGE. Prioritize style emulation above all else, while still retaining the recognizable content and composition from the CONTENT_IMAGE.
+- **At lower percentages:** Gradually blend the styles, allowing more of the CONTENT_IMAGE's original visual characteristics to remain.
+- **Your Current Task:** At ${styleStrength}%, apply the style with corresponding intensity.
+
+**USER CONTEXT:**
+The user provides this additional guidance for the content: "${userRequest}".
+
+**FINAL GOAL:** Produce a new image that maintains the subject and layout of the CONTENT_IMAGE, but is rendered entirely in the authentic, deeply analyzed style of the STYLE_IMAGE.
+`.trim().replace(/\n{2,}/g, '\n');
+
+    } else { // 'compose' logic
+        // 1. Add the main image
+        parts.push({
+            inlineData: { data: mainImage.base64, mimeType: mainImage.mimeType }
+        });
+
+        // 2. Add the main image mask immediately after the main image
+        if (mask) {
             parts.push({
-                inlineData: { data: ref.mask.base64, mimeType: ref.mask.mimeType }
+                inlineData: { data: mask.base64, mimeType: mask.mimeType }
             });
         }
-    });
 
-    // --- PROMPT LOGIC ---
-    let userRequest: string;
-    let contextInstructions: string = '';
-    const maskProvided = !!mask;
-
-    switch (editFunction) {
-        case 'style':
-            if (referenceImages.length === 0) {
-                throw new Error("Para transferência de estilo, você deve enviar uma imagem de referência.");
+        // 3. Add any reference images and their corresponding masks
+        referenceImages.forEach(ref => {
+            parts.push({
+                inlineData: { data: ref.image.base64, mimeType: ref.image.mimeType }
+            });
+            if (ref.mask) {
+                parts.push({
+                    inlineData: { data: ref.mask.base64, mimeType: ref.mask.mimeType }
+                });
             }
-             const intensityMap: { [key: number]: string } = {
-                1: 'a very subtle hint of the style',
-                2: 'a subtle application of the style',
-                3: 'a moderate and balanced application of the style',
-                4: 'a strong and noticeable application of the style',
-                5: 'a very strong and prominent application of the style, transforming the original image completely while preserving its core subject and composition',
-            };
-            const intensityDescription = styleIntensity ? intensityMap[styleIntensity] : 'a moderate and balanced application of the style';
+        });
+        
+        // --- PROMPT LOGIC ---
+        let userRequest: string;
+        let contextInstructions: string = '';
+        const maskProvided = !!mask;
 
-            userRequest = prompt || `Apply the style as instructed.`;
-            
-            contextInstructions = `
-**CRITICAL INSTRUCTIONS FOR STYLE TRANSFER:**
-1.  **IMAGE ROLES:** The very first image is the **CONTENT IMAGE**. ${maskProvided ? 'The second image is a MASK for the content image.' : ''} All subsequent images are **STYLE REFERENCE IMAGES**.
-2.  **PRESERVE CONTENT:** You MUST preserve the subject, objects, composition, and overall layout of the CONTENT IMAGE. Do NOT copy, introduce, or blend any subjects or objects from the STYLE REFERENCE IMAGES.
-3.  **APPLY STYLE:** You must ONLY extract the artistic style (e.g., color palette, textures, brushstrokes, lighting, mood) from the STYLE REFERENCE IMAGES and apply it to the CONTENT IMAGE.
-4.  **INTENSITY:** The desired intensity of the style transfer is: **${intensityDescription}**.
-`.trim();
-
-            if (maskProvided) {
-                 contextInstructions += `
-**MASK INSTRUCTION:** You MUST apply the style transfer exclusively within the WHITE area of the provided MASK. The BLACK (unmasked) area must remain 100% unchanged and preserved from the original CONTENT IMAGE.`;
-            }
-
-            if (styleIntensity && styleIntensity >= 4) {
-                contextInstructions += `
-
-**ABSOLUTE RULE:** Because a high intensity ("${intensityDescription}") is requested, be extra careful. It is FORBIDDEN to transfer any recognizable objects or shapes from the style references. The goal is a stylistic transformation, NOT a content merge. For example, if the content is a cat and the style is a Van Gogh painting, the output should be a cat painted *like* Van Gogh, not a cat merged with elements from the specific painting.`;
-            }
-            break;
-
-        case 'compose':
-            userRequest = prompt || (referenceImages.length > 0 ? "Una os elementos das imagens de forma criativa e realista." : "Aplique a edição solicitada na área selecionada.");
-            if (!userRequest && !referenceImages.length) {
-                throw new Error("Por favor, descreva a edição que você deseja fazer ou adicione uma imagem de referência.");
-            }
-            
-            contextInstructions = `
+        userRequest = prompt || (referenceImages.length > 0 ? "Una os elementos das imagens de forma criativa e realista." : "Aplique a edição solicitada na área selecionada.");
+        if (!userRequest && !referenceImages.length) {
+            throw new Error("Por favor, descreva a edição que você deseja fazer ou adicione uma imagem de referência.");
+        }
+        
+        contextInstructions = `
 **OPERATION: Object Insertion**
 
 **RULE #1 (ABSOLUTE):** The output image MUST be identical to the first input image (BASE_IMAGE) in every area that is BLACK in the second input image (MAIN_MASK). Do NOT change the background, lighting, or style of the original scene. Any change outside the WHITE area of the MAIN_MASK is a critical failure.
@@ -166,24 +204,19 @@ export const processImagesWithPrompt = async (
 
 **GOAL:** The final image should look like the original BASE_IMAGE, but with the new object realistically added in the specified location.
 `;
-            if (!maskProvided) {
-                 contextInstructions = `
+        if (!maskProvided) {
+             contextInstructions = `
 **OPERATION: General Image Edit**
 Follow the user's instructions to edit the image: "${userRequest}". Use the reference images provided for context or style if applicable.
 `;
-            }
-            break;
-    }
-    
-    const dimensionInstruction = originalSize
-        ? `**CRITICAL RULE**: The output image MUST have the exact same dimensions as the original image: ${originalSize.width}px by ${originalSize.height}px. Do NOT crop, resize, or change the aspect ratio. The entire scene from the original image must be present in the final output, just with the edits applied.`
-        : '';
-
-    const finalPrompt = `
+        }
+        
+        finalPrompt = `
 ${dimensionInstruction}
 
 ${contextInstructions}
 `.trim().replace(/\n{2,}/g, '\n');
+    }
 
     parts.push({ text: finalPrompt });
 

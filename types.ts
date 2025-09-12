@@ -1,6 +1,6 @@
 export type Mode = 'create' | 'edit';
 export type CreateFunction = 'free' | 'sticker' | 'text' | 'comic';
-export type EditFunction = 'style' | 'compose';
+export type EditFunction = 'compose' | 'style';
 
 export interface UploadedImage {
   base64: string;
@@ -29,7 +29,7 @@ export interface HistoryEntry {
   // Edit mode state
   editFunction?: EditFunction;
   referenceImages?: ReferenceImage[];
-  styleIntensity?: number;
+  styleStrength?: number;
 }
 
 export interface UploadProgress {

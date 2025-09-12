@@ -81,6 +81,53 @@
         border: 2px solid #18181b; /* zinc-900 */
         box-shadow: 0 0 0 1px #a1a1aa; /* zinc-400 */
       }
+
+      /* Custom select for a flat, material design look */
+      .custom-select-wrapper {
+        position: relative;
+        width: 100%;
+        background-color: #27272a; /* zinc-800 */
+        border-bottom: 1px solid #52525b; /* zinc-600 */
+        border-radius: 4px 4px 0 0;
+        transition: border-color 0.2s;
+      }
+      .custom-select-wrapper:focus-within {
+        border-bottom-color: #3b82f6; /* blue-500 */
+      }
+      .custom-select-wrapper::after {
+        content: 'arrow_drop_down';
+        font-family: 'Material Symbols Outlined';
+        font-weight: 400;
+        font-size: 24px;
+        position: absolute;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        pointer-events: none;
+        color: #a1a1aa; /* zinc-400 */
+        transition: color 0.2s;
+      }
+      .custom-select-wrapper:focus-within::after {
+         color: #3b82f6; /* blue-500 */
+      }
+      select.custom-select {
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        appearance: none;
+        width: 100%;
+        padding: 0.5rem 2.5rem 0.5rem 0.5rem; /* 8px padding, with 40px on the right for the icon */
+        background-color: transparent;
+        border: none;
+        color: #d4d4d8; /* zinc-300 */
+        font-size: 0.75rem; /* text-xs */
+        line-height: 1rem;
+        cursor: pointer;
+        outline: none;
+      }
+      select.custom-select option {
+        background-color: #18181b; /* zinc-900 */
+        color: #d4d4d8; /* zinc-300 */
+      }
     </style>
 <script type="importmap">
 {
