@@ -1,11 +1,17 @@
-
 export type Mode = 'create' | 'edit';
 export type CreateFunction = 'free' | 'sticker' | 'text' | 'comic';
-export type EditFunction = 'add-remove' | 'style' | 'compose';
+export type EditFunction = 'style' | 'compose';
 
 export interface UploadedImage {
   base64: string;
   mimeType: string;
+}
+
+export interface ReferenceImage {
+  image: UploadedImage;
+  previewUrl: string;
+  mask: UploadedImage | null;
+  maskedObjectPreviewUrl?: string;
 }
 
 export interface HistoryEntry {
@@ -22,8 +28,7 @@ export interface HistoryEntry {
   
   // Edit mode state
   editFunction?: EditFunction;
-  referenceImages?: UploadedImage[];
-  referenceImagePreviews?: string[];
+  referenceImages?: ReferenceImage[];
   styleIntensity?: number;
 }
 

@@ -1,5 +1,5 @@
 import { GoogleGenAI, Modality, GenerateContentResponse } from "@google/genai";
-import { UploadedImage, EditFunction } from '../types';
+import { UploadedImage, EditFunction, ReferenceImage } from '../types';
 
 if (!process.env.API_KEY) {
     throw new Error("API_KEY environment variable is not set.");
@@ -67,7 +67,7 @@ export const generateImage = async (prompt: string, createFunction: string, aspe
 export const processImagesWithPrompt = async (
     prompt: string,
     mainImage: UploadedImage,
-    referenceImages: UploadedImage[],
+    referenceImages: ReferenceImage[],
     mask: UploadedImage | null,
     editFunction: EditFunction,
     originalSize: { width: number, height: number } | null,
@@ -80,22 +80,29 @@ export const processImagesWithPrompt = async (
         inlineData: { data: mainImage.base64, mimeType: mainImage.mimeType }
     });
 
-    // 2. Add the mask immediately after the main image for correct context
+    // 2. Add the main image mask immediately after the main image
     if (mask) {
         parts.push({
             inlineData: { data: mask.base64, mimeType: mask.mimeType }
         });
     }
 
-    // 3. Add any reference images
-    const referenceImageParts = referenceImages.map(image => ({
-        inlineData: { data: image.base64, mimeType: image.mimeType }
-    }));
-    parts.push(...referenceImageParts);
+    // 3. Add any reference images and their corresponding masks
+    referenceImages.forEach(ref => {
+        parts.push({
+            inlineData: { data: ref.image.base64, mimeType: ref.image.mimeType }
+        });
+        if (ref.mask) {
+            parts.push({
+                inlineData: { data: ref.mask.base64, mimeType: ref.mask.mimeType }
+            });
+        }
+    });
 
     // --- PROMPT LOGIC ---
     let userRequest: string;
     let contextInstructions: string = '';
+    const maskProvided = !!mask;
 
     switch (editFunction) {
         case 'style':
@@ -115,11 +122,16 @@ export const processImagesWithPrompt = async (
             
             contextInstructions = `
 **CRITICAL INSTRUCTIONS FOR STYLE TRANSFER:**
-1.  **IMAGE ROLES:** The very first image is the **CONTENT IMAGE**. All subsequent images are **STYLE REFERENCE IMAGES**.
+1.  **IMAGE ROLES:** The very first image is the **CONTENT IMAGE**. ${maskProvided ? 'The second image is a MASK for the content image.' : ''} All subsequent images are **STYLE REFERENCE IMAGES**.
 2.  **PRESERVE CONTENT:** You MUST preserve the subject, objects, composition, and overall layout of the CONTENT IMAGE. Do NOT copy, introduce, or blend any subjects or objects from the STYLE REFERENCE IMAGES.
 3.  **APPLY STYLE:** You must ONLY extract the artistic style (e.g., color palette, textures, brushstrokes, lighting, mood) from the STYLE REFERENCE IMAGES and apply it to the CONTENT IMAGE.
 4.  **INTENSITY:** The desired intensity of the style transfer is: **${intensityDescription}**.
 `.trim();
+
+            if (maskProvided) {
+                 contextInstructions += `
+**MASK INSTRUCTION:** You MUST apply the style transfer exclusively within the WHITE area of the provided MASK. The BLACK (unmasked) area must remain 100% unchanged and preserved from the original CONTENT IMAGE.`;
+            }
 
             if (styleIntensity && styleIntensity >= 4) {
                 contextInstructions += `
@@ -129,23 +141,36 @@ export const processImagesWithPrompt = async (
             break;
 
         case 'compose':
-            if (referenceImages.length === 0) {
-                throw new Error("Para unir imagens, você deve enviar uma imagem de referência.");
+            userRequest = prompt || (referenceImages.length > 0 ? "Una os elementos das imagens de forma criativa e realista." : "Aplique a edição solicitada na área selecionada.");
+            if (!userRequest && !referenceImages.length) {
+                throw new Error("Por favor, descreva a edição que você deseja fazer ou adicione uma imagem de referência.");
             }
-            userRequest = prompt || "Combine the elements of the images creatively.";
-            contextInstructions = `Image 1 is the target canvas. The other images are references containing elements to be blended.`;
-            break;
-        
-        case 'add-remove':
-        default:
-            userRequest = prompt;
-             if (!userRequest) {
-                 throw new Error("Por favor, descreva a edição que você deseja fazer.");
-            }
-            if (mask) {
-                contextInstructions = `Image 1 is the original image. Image 2 is the edit mask. Apply the request ONLY to the WHITE area of the mask. The BLACK area must remain 100% unchanged. The edit must blend seamlessly.`;
-            } else {
-                contextInstructions = `Image 1 is the target image to be modified. Use any other images as references to guide the modification.`;
+            
+            contextInstructions = `
+**OPERATION: Object Insertion**
+
+**RULE #1 (ABSOLUTE):** The output image MUST be identical to the first input image (BASE_IMAGE) in every area that is BLACK in the second input image (MAIN_MASK). Do NOT change the background, lighting, or style of the original scene. Any change outside the WHITE area of the MAIN_MASK is a critical failure.
+
+**INPUTS:**
+- **Image 1 (BASE_IMAGE):** The background scene.
+- **Image 2 (MAIN_MASK):** The target area for insertion, marked in WHITE.
+- **Image 3 (REFERENCE_IMAGE):** Contains the object to be inserted.
+- **Image 4 (REFERENCE_MASK):** Isolates the object to be extracted from Image 3, marked in WHITE.
+- (Additional reference images and masks may follow in pairs)
+
+**INSTRUCTIONS:**
+1.  Precisely extract the object from the REFERENCE_IMAGE using the REFERENCE_MASK.
+2.  Place the extracted object into the WHITE area of the MAIN_MASK on the BASE_IMAGE.
+3.  Integrate the object seamlessly. Adjust only the object's lighting and shadows to match the BASE_IMAGE.
+4.  The user provides this additional context for the integration: "${userRequest}". This context applies ONLY to the inserted object and the immediate blend area, NOT the entire scene.
+
+**GOAL:** The final image should look like the original BASE_IMAGE, but with the new object realistically added in the specified location.
+`;
+            if (!maskProvided) {
+                 contextInstructions = `
+**OPERATION: General Image Edit**
+Follow the user's instructions to edit the image: "${userRequest}". Use the reference images provided for context or style if applicable.
+`;
             }
             break;
     }
@@ -156,8 +181,6 @@ export const processImagesWithPrompt = async (
 
     const finalPrompt = `
 ${dimensionInstruction}
-
-User request: "${userRequest}"
 
 ${contextInstructions}
 `.trim().replace(/\n{2,}/g, '\n');
