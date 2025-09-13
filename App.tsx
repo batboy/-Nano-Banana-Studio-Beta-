@@ -69,6 +69,7 @@ const PanelSection: React.FC<{ title: string; icon: React.ReactNode; children: R
             <button
                 onClick={() => setIsOpen(!isOpen)}
                 className="w-full flex items-center justify-between p-3 text-sm font-semibold text-zinc-300 hover:bg-zinc-800/50"
+                title={`Expandir/recolher ${title}`}
             >
                 <div className="flex items-center gap-2">
                     {icon}
@@ -93,6 +94,7 @@ interface ImageEditorProps {
 
 interface ImageEditorRef {
   getMaskData: () => UploadedImage | null;
+  getMaskAsCanvas: () => HTMLCanvasElement | null;
   hasMaskData: () => boolean;
   getOriginalImageSize: () => { width: number, height: number } | null;
   clearMask: () => void;
@@ -413,106 +415,118 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
         setTransform({ scale: newScale, x: newX, y: newY });
     }, [transform]);
     
-    useImperativeHandle(ref, () => ({
-        getMaskData: () => {
+    // FIX: Restructured to allow `getMaskData` to call `getMaskAsCanvas`.
+    // The previous implementation of calling through `ref.current` was incorrect as the ref
+    // is not yet assigned during handle creation and fails if the ref is a callback.
+    useImperativeHandle(ref, () => {
+        const getMaskAsCanvas = () => {
             const maskCanvas = maskCanvasRef.current;
             if (!maskCanvas) return null;
 
-            const previewCtx = maskCanvas.getContext('2d', { willReadFrequently: true });
-            if (!previewCtx) return null;
-            const previewImageData = previewCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-            let hasMask = false;
-            for (let i = 3; i < previewImageData.data.length; i += 4) {
-                if (previewImageData.data[i] > 10) { 
-                    hasMask = true;
-                    break;
-                }
-            }
-            if (!hasMask) return null;
-            
-            const imageData = previewCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+            const finalMaskCanvas = document.createElement('canvas');
+            finalMaskCanvas.width = maskCanvas.width;
+            finalMaskCanvas.height = maskCanvas.height;
+            const finalCtx = finalMaskCanvas.getContext('2d', { willReadFrequently: true });
+            if (!finalCtx) return null;
+
+            finalCtx.drawImage(maskCanvas, 0, 0);
+
+            const imageData = finalCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
             const data = imageData.data;
+            let hasMask = false;
             for (let i = 0; i < data.length; i += 4) {
                 if (data[i + 3] > 10) {
                     data[i] = 255; data[i + 1] = 255; data[i + 2] = 255; data[i + 3] = 255;
+                    hasMask = true;
                 } else {
                     data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 255;
                 }
             }
 
-            previewCtx.putImageData(imageData, 0, 0);
+            if (!hasMask) return null;
 
-            const dataUrl = maskCanvas.toDataURL('image/png');
-            const base64 = dataUrl.split(',')[1];
-            return { base64, mimeType: 'image/png' };
-        },
-        hasMaskData: () => {
-            const maskCanvas = maskCanvasRef.current;
-            if (!maskCanvas) return false;
-            const ctx = maskCanvas.getContext('2d', { willReadFrequently: true });
-            if (!ctx) return false;
-            const imageData = ctx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-            for (let i = 3; i < imageData.data.length; i += 4) {
-                if (imageData.data[i] > 10) { 
-                    return true;
-                }
-            }
-            return false;
-        },
-        getOriginalImageSize: () => {
-            return originalImageSizeRef.current.width > 0 ? originalImageSizeRef.current : null;
-        },
-        clearMask,
-        zoomIn: () => handleZoomSliderChange(transform.scale * 100 * 1.2),
-        zoomOut: () => handleZoomSliderChange(transform.scale * 100 / 1.2),
-        setZoom: (zoom) => handleZoomSliderChange(zoom),
-        zoomToFit,
-        stampObjectOnMask: (data: { previewUrl: string, transform: any, maskOpacity: number }) => {
-            const maskCanvas = maskCanvasRef.current;
-            if (!maskCanvas) return;
-
-            const ctx = maskCanvas.getContext('2d');
-            if (!ctx) return;
-            
-            const { placerTransform } = data.transform;
-            
-            const canvasX = (placerTransform.x - transform.x) / transform.scale;
-            const canvasY = (placerTransform.y - transform.y) / transform.scale;
-            const canvasWidth = placerTransform.width / transform.scale;
-            const canvasHeight = placerTransform.height / transform.scale;
-            
-            const img = new Image();
-            img.crossOrigin = "anonymous";
-            img.onload = () => {
-                const tempStampCanvas = document.createElement('canvas');
-                tempStampCanvas.width = maskCanvas.width;
-                tempStampCanvas.height = maskCanvas.height;
-                const tempCtx = tempStampCanvas.getContext('2d');
-                if (!tempCtx) return;
-
-                tempCtx.save();
-                tempCtx.translate(canvasX + canvasWidth / 2, canvasY + canvasHeight / 2);
-                tempCtx.rotate((placerTransform.rotation * Math.PI) / 180);
-                tempCtx.drawImage(img, -canvasWidth / 2, -canvasHeight / 2, canvasWidth, canvasHeight);
-                tempCtx.restore();
-
-                const imageData = tempCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-                const pixelData = imageData.data;
-                for (let i = 0; i < pixelData.length; i += 4) {
-                    if (pixelData[i + 3] > 0) {
-                        pixelData[i] = 74;
-                        pixelData[i + 1] = 222;
-                        pixelData[i + 2] = 128;
-                        pixelData[i + 3] = Math.round(255 * data.maskOpacity);
+            finalCtx.putImageData(imageData, 0, 0);
+            return finalMaskCanvas;
+        };
+        
+        return {
+            getMaskAsCanvas,
+            getMaskData: () => {
+                const finalMaskCanvas = getMaskAsCanvas();
+                if (!finalMaskCanvas) return null;
+                
+                const dataUrl = finalMaskCanvas.toDataURL('image/png');
+                const base64 = dataUrl.split(',')[1];
+                return { base64, mimeType: 'image/png' };
+            },
+            hasMaskData: () => {
+                const maskCanvas = maskCanvasRef.current;
+                if (!maskCanvas) return false;
+                const ctx = maskCanvas.getContext('2d', { willReadFrequently: true });
+                if (!ctx) return false;
+                const imageData = ctx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+                for (let i = 3; i < imageData.data.length; i += 4) {
+                    if (imageData.data[i] > 10) { 
+                        return true;
                     }
                 }
-                tempCtx.putImageData(imageData, 0, 0);
+                return false;
+            },
+            getOriginalImageSize: () => {
+                return originalImageSizeRef.current.width > 0 ? originalImageSizeRef.current : null;
+            },
+            clearMask,
+            zoomIn: () => handleZoomSliderChange(transform.scale * 100 * 1.2),
+            zoomOut: () => handleZoomSliderChange(transform.scale * 100 / 1.2),
+            setZoom: (zoom) => handleZoomSliderChange(zoom),
+            zoomToFit,
+            stampObjectOnMask: (data: { previewUrl: string, transform: any, maskOpacity: number }) => {
+                const maskCanvas = maskCanvasRef.current;
+                if (!maskCanvas) return;
+
+                const ctx = maskCanvas.getContext('2d');
+                if (!ctx) return;
                 
-                ctx.drawImage(tempStampCanvas, 0, 0);
-            };
-            img.src = data.previewUrl;
-        },
-    }));
+                const { placerTransform } = data.transform;
+                
+                const canvasX = (placerTransform.x - transform.x) / transform.scale;
+                const canvasY = (placerTransform.y - transform.y) / transform.scale;
+                const canvasWidth = placerTransform.width / transform.scale;
+                const canvasHeight = placerTransform.height / transform.scale;
+                
+                const img = new Image();
+                img.crossOrigin = "anonymous";
+                img.onload = () => {
+                    const tempStampCanvas = document.createElement('canvas');
+                    tempStampCanvas.width = maskCanvas.width;
+                    tempStampCanvas.height = maskCanvas.height;
+                    const tempCtx = tempStampCanvas.getContext('2d');
+                    if (!tempCtx) return;
+
+                    tempCtx.save();
+                    tempCtx.translate(canvasX + canvasWidth / 2, canvasY + canvasHeight / 2);
+                    tempCtx.rotate((placerTransform.rotation * Math.PI) / 180);
+                    tempCtx.drawImage(img, -canvasWidth / 2, -canvasHeight / 2, canvasWidth, canvasHeight);
+                    tempCtx.restore();
+
+                    const imageData = tempCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+                    const pixelData = imageData.data;
+                    for (let i = 0; i < pixelData.length; i += 4) {
+                        if (pixelData[i + 3] > 0) {
+                            pixelData[i] = 74;
+                            pixelData[i + 1] = 222;
+                            pixelData[i + 2] = 128;
+                            pixelData[i + 3] = Math.round(255 * data.maskOpacity);
+                        }
+                    }
+                    tempCtx.putImageData(imageData, 0, 0);
+                    
+                    ctx.drawImage(tempStampCanvas, 0, 0);
+                };
+                img.src = data.previewUrl;
+            },
+        };
+    });
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -662,7 +676,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
 
     return (
         <div ref={containerRef} 
-             className="w-full h-full relative overflow-hidden touch-none bg-zinc-900/50"
+             className="w-full h-full relative overflow-hidden touch-none bg-zinc-900/50 rounded-lg"
              onWheel={handleWheel}
              onMouseDown={handleContainerMouseDown}
              onMouseMove={handleContainerMouseMove}
@@ -753,543 +767,80 @@ const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({ isOpen, title, 
     );
 };
 
-interface ReferenceMaskEditorProps {
-    isOpen: boolean;
-    imageSrc: string;
-    onSave: (maskData: UploadedImage | null, maskedObjectPreviewUrl: string | null) => void;
-    onClose: () => void;
-}
+const compositeImageWithMask = (
+    originalImageUrl: string,
+    aiResultUrl: string,
+    maskUrl: string
+): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const originalImage = new Image();
+        const aiResultImage = new Image();
+        const maskImage = new Image();
 
-const ReferenceMaskEditor: React.FC<ReferenceMaskEditorProps> = ({ isOpen, imageSrc, onSave, onClose }) => {
-    const imageCanvasRef = useRef<HTMLCanvasElement>(null);
-    const maskCanvasRef = useRef<HTMLCanvasElement>(null);
-    const containerRef = useRef<HTMLDivElement>(null);
+        originalImage.crossOrigin = "anonymous";
+        aiResultImage.crossOrigin = "anonymous";
+        maskImage.crossOrigin = "anonymous";
 
-    const [isDrawing, setIsDrawing] = useState(false);
-    const lastPositionRef = useRef<{ x: number, y: number } | null >(null);
-    const currentStrokePointsRef = useRef<{ x: number, y: number }[]>([]);
+        let loadedCount = 0;
+        const totalImages = 3;
 
-    const [brushSize, setBrushSize] = useState(40);
-    const [maskOpacity, setMaskOpacity] = useState(0.7);
-    const [maskTool, setMaskTool] = useState<'brush' | 'eraser'>('brush');
-    const [cursorPreview, setCursorPreview] = useState({ x: 0, y: 0, visible: false });
+        const onImageLoad = () => {
+            loadedCount++;
+            if (loadedCount === totalImages) {
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = originalImage.naturalWidth;
+                    canvas.height = originalImage.naturalHeight;
+                    const ctx = canvas.getContext('2d');
 
-    const getCoords = useCallback((e: React.MouseEvent<HTMLElement>): [number, number] => {
-        const canvas = maskCanvasRef.current;
-        if (!canvas || canvas.width === 0) return [0, 0];
-        
-        const rect = canvas.getBoundingClientRect();
-
-        const canvasRatio = canvas.width / canvas.height;
-        const rectRatio = rect.width / rect.height;
-
-        let renderedWidth, renderedHeight, offsetX, offsetY;
-
-        if (canvasRatio > rectRatio) {
-            renderedWidth = rect.width;
-            renderedHeight = rect.width / canvasRatio;
-            offsetX = 0;
-            offsetY = (rect.height - renderedHeight) / 2;
-        } else {
-            renderedHeight = rect.height;
-            renderedWidth = rect.height * canvasRatio;
-            offsetY = 0;
-            offsetX = (rect.width - renderedWidth) / 2;
-        }
-
-        const mouseX = e.clientX - rect.left - offsetX;
-        const mouseY = e.clientY - rect.top - offsetY;
-        
-        const scaleX = canvas.width / renderedWidth;
-        const scaleY = canvas.height / renderedHeight;
-
-        const x = mouseX * scaleX;
-        const y = mouseY * scaleY;
-
-        return [x, y];
-    }, []);
-
-    const clearMask = useCallback(() => {
-        const canvas = maskCanvasRef.current;
-        if (canvas) {
-            const ctx = canvas.getContext('2d');
-            ctx?.clearRect(0, 0, canvas.width, canvas.height);
-        }
-    }, []);
-
-    const floodFill = useCallback((canvas: HTMLCanvasElement, startX: number, startY: number, opacity: number) => {
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        if (!ctx) return;
-    
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const { width, height } = canvas;
-        const data = imageData.data;
-        
-        const alpha = Math.round(opacity * 255);
-        const fillColorRgba = [74, 222, 128, alpha];
-        
-        const startPixelPos = (startY * width + startX) * 4;
-        
-        if (data[startPixelPos + 3] > 10) return;
-    
-        const pixelStack = [[startX, startY]];
-    
-        while (pixelStack.length) {
-            const newPos = pixelStack.pop();
-            if (!newPos) continue;
-            let [x, y] = newPos;
-    
-            let pixelPos = (y * width + x) * 4;
-            while (y-- >= 0 && data[pixelPos + 3] < 10) {
-                pixelPos -= width * 4;
-            }
-            pixelPos += width * 4;
-            y++;
-            
-            let reachLeft = false;
-            let reachRight = false;
-    
-            while (y++ < height - 1 && data[pixelPos + 3] < 10) {
-                data[pixelPos] = fillColorRgba[0];
-                data[pixelPos + 1] = fillColorRgba[1];
-                data[pixelPos + 2] = fillColorRgba[2];
-                data[pixelPos + 3] = fillColorRgba[3];
-    
-                if (x > 0) {
-                    if (data[pixelPos - 4 + 3] < 10) {
-                        if (!reachLeft) {
-                            pixelStack.push([x - 1, y]);
-                            reachLeft = true;
-                        }
-                    } else if (reachLeft) {
-                        reachLeft = false;
+                    if (!ctx) {
+                        return reject(new Error("Não foi possível criar o contexto do canvas"));
                     }
+
+                    // Passo 1: Desenhe o resultado da IA
+                    ctx.drawImage(aiResultImage, 0, 0);
+
+                    // Passo 2: Use a máscara para "recortar" a área de interesse do resultado da IA.
+                    ctx.globalCompositeOperation = 'destination-in';
+                    ctx.drawImage(maskImage, 0, 0);
+                    
+                    // Passo 3: Desenhe a imagem original por trás do recorte.
+                    ctx.globalCompositeOperation = 'destination-over';
+                    ctx.drawImage(originalImage, 0, 0);
+
+                    // Redefinir a operação de composição
+                    ctx.globalCompositeOperation = 'source-over';
+
+                    resolve(canvas.toDataURL('image/png'));
+                } catch (e) {
+                    reject(e);
                 }
-    
-                if (x < width - 1) {
-                    if (data[pixelPos + 4 + 3] < 10) {
-                        if (!reachRight) {
-                            pixelStack.push([x + 1, y]);
-                            reachRight = true;
-                        }
-                    } else if (reachRight) {
-                        reachRight = false;
-                    }
-                }
-                
-                pixelPos += width * 4;
-            }
-        }
-        
-        ctx.putImageData(imageData, 0, 0);
-    }, []);
-
-    const fillEnclosedArea = useCallback((points: {x: number, y: number}[]) => {
-        const canvas = maskCanvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        const centroid = points.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
-        centroid.x /= points.length;
-        centroid.y /= points.length;
-        const seedX = Math.floor(centroid.x);
-        const seedY = Math.floor(centroid.y);
-    
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = canvas.width;
-        tempCanvas.height = canvas.height;
-        const tempCtx = tempCanvas.getContext('2d');
-        if(!tempCtx) return;
-
-        tempCtx.drawImage(canvas, 0, 0);
-
-        tempCtx.beginPath();
-        tempCtx.moveTo(points[0].x, points[0].y);
-        for (let i = 1; i < points.length; i++) {
-            tempCtx.lineTo(points[i].x, points[i].y);
-        }
-        tempCtx.closePath();
-        tempCtx.lineWidth = brushSize;
-        tempCtx.lineCap = 'round';
-        tempCtx.lineJoin = 'round';
-        tempCtx.strokeStyle = `rgba(74, 222, 128, ${maskOpacity})`;
-        tempCtx.stroke();
-        
-        floodFill(tempCanvas, seedX, seedY, maskOpacity);
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(tempCanvas, 0, 0);
-
-    }, [brushSize, floodFill, maskOpacity]);
-
-
-    useEffect(() => {
-        if (!isOpen || !imageSrc) return;
-        const image = new Image();
-        image.crossOrigin = "anonymous";
-        image.src = imageSrc;
-        image.onload = () => {
-            const imageCanvas = imageCanvasRef.current;
-            const maskCanvas = maskCanvasRef.current;
-            const container = containerRef.current;
-            if (!imageCanvas || !maskCanvas || !container) return;
-
-            const canvasW = image.width;
-            const canvasH = image.height;
-
-            [imageCanvas, maskCanvas].forEach(canvas => {
-                canvas.width = canvasW;
-                canvas.height = canvasH;
-                canvas.style.width = '100%';
-                canvas.style.height = '100%';
-                canvas.style.objectFit = 'contain';
-            });
-
-            const ctx = imageCanvas.getContext('2d');
-            ctx?.drawImage(image, 0, 0, canvasW, canvasH);
-            clearMask();
-        };
-    }, [isOpen, imageSrc, clearMask]);
-
-    useEffect(() => {
-        if (!isOpen) return;
-
-        const handleKeyDown = (e: KeyboardEvent) => {
-            const step = 5;
-            if (e.key === '[') {
-                e.preventDefault();
-                setBrushSize(prev => Math.max(5, prev - step));
-            } else if (e.key === ']') {
-                e.preventDefault();
-                setBrushSize(prev => Math.min(150, prev + step));
             }
         };
-
-        window.addEventListener('keydown', handleKeyDown);
-        return () => {
-            window.removeEventListener('keydown',handleKeyDown);
-        };
-    }, [isOpen]);
-
-    const startDrawing = (e: React.MouseEvent<HTMLDivElement>) => {
-        setIsDrawing(true);
-        const [x, y] = getCoords(e);
-        lastPositionRef.current = { x, y };
-        currentStrokePointsRef.current = [{ x, y }];
-    };
-
-    const stopDrawing = () => {
-        if (!isDrawing) return;
-        setIsDrawing(false);
-        lastPositionRef.current = null;
-
-        if (maskTool === 'brush' && currentStrokePointsRef.current.length > 3) {
-            const points = currentStrokePointsRef.current;
-            const startPoint = points[0];
-            const endPoint = points[points.length - 1];
-            const distance = Math.sqrt(Math.pow(endPoint.x - startPoint.x, 2) + Math.pow(endPoint.y - startPoint.y, 2));
-
-            if (distance < 40) {
-                fillEnclosedArea(points);
-            }
-        }
-        currentStrokePointsRef.current = [];
-    };
-
-    const draw = (e: React.MouseEvent<HTMLDivElement>) => {
-        if (!isDrawing) return;
-        const ctx = maskCanvasRef.current?.getContext('2d');
-        if (!ctx || !lastPositionRef.current) return;
-
-        const [x, y] = getCoords(e);
-        currentStrokePointsRef.current.push({ x, y });
-
-        ctx.lineWidth = brushSize;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.strokeStyle = maskTool === 'brush' ? `rgba(74, 222, 128, ${maskOpacity})` : 'rgba(0,0,0,1)';
-        ctx.globalCompositeOperation = maskTool === 'brush' ? 'source-over' : 'destination-out';
         
-        ctx.beginPath();
-        ctx.moveTo(lastPositionRef.current.x, lastPositionRef.current.y);
-        ctx.lineTo(x, y);
-        ctx.stroke();
-
-        lastPositionRef.current = { x, y };
-    };
-    
-    const handleSave = () => {
-        const maskCanvas = maskCanvasRef.current;
-        if (!maskCanvas) {
-            onSave(null, null);
-            return;
-        }
-
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = maskCanvas.width;
-        tempCanvas.height = maskCanvas.height;
-
-        const ctx = tempCanvas.getContext('2d', { willReadFrequently: true });
-        if (!ctx) {
-            onSave(null, null);
-            return;
-        }
-        ctx.drawImage(maskCanvas, 0, 0);
-
-        const imageData = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
-        let hasMask = false;
-        for (let i = 3; i < imageData.data.length; i += 4) {
-            if (imageData.data[i] > 10) {
-                hasMask = true;
-                break;
-            }
-        }
-
-        if (!hasMask) {
-            onSave(null, null);
-            return;
-        }
-
-        const finalMaskData = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
-        const data = finalMaskData.data;
-        for (let i = 0; i < data.length; i += 4) {
-            if (data[i + 3] > 10) {
-                data[i] = 255; data[i + 1] = 255; data[i + 2] = 255; data[i + 3] = 255;
+        const onImageError = (e: Event | string) => {
+            // FIX: The onerror handler for an image can receive an Event or a string.
+            // We must check the type of `e` before accessing `e.currentTarget` to avoid a runtime error.
+            if (e instanceof Event) {
+                const target = e.currentTarget as HTMLImageElement | null;
+                reject(new Error(`Falha ao carregar uma imagem para composição: ${target?.src}`));
             } else {
-                data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 255;
+                reject(new Error(`Falha ao carregar uma imagem para composição: ${e.toString()}`));
             }
-        }
-        ctx.putImageData(finalMaskData, 0, 0);
-        
-        let maskedObjectPreviewUrl: string | null = null;
-        const maskedObjectCanvas = document.createElement('canvas');
-        maskedObjectCanvas.width = maskCanvas.width;
-        maskedObjectCanvas.height = maskCanvas.height;
-        const moCtx = maskedObjectCanvas.getContext('2d');
-        if (moCtx) {
-            const imageEl = new Image();
-            imageEl.crossOrigin = "anonymous";
-            imageEl.onload = () => {
-                moCtx.drawImage(imageEl, 0, 0);
-                moCtx.globalCompositeOperation = 'destination-in';
-                moCtx.drawImage(tempCanvas, 0, 0);
-                maskedObjectPreviewUrl = maskedObjectCanvas.toDataURL('image/png');
-
-                const dataUrl = tempCanvas.toDataURL('image/png');
-                const base64 = dataUrl.split(',')[1];
-                onSave({ base64, mimeType: 'image/png' }, maskedObjectPreviewUrl);
-            };
-            imageEl.src = imageSrc;
-        } else {
-            const dataUrl = tempCanvas.toDataURL('image/png');
-            const base64 = dataUrl.split(',')[1];
-            onSave({ base64, mimeType: 'image/png' }, null);
-        }
-    };
-
-    if (!isOpen) return null;
-
-    return (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-            <div className="bg-zinc-900 rounded-lg max-w-5xl w-full h-[90vh] flex flex-col p-4 ring-1 ring-white/10 shadow-2xl">
-                <h2 className="text-xl font-bold mb-4 text-zinc-100 flex-shrink-0">Selecionar Elemento para Composição</h2>
-                <div className="flex-1 flex gap-4 min-h-0">
-                    <div 
-                        ref={containerRef} 
-                        className="flex-1 bg-zinc-950 rounded-md relative flex items-center justify-center overflow-hidden cursor-none"
-                        onMouseDown={startDrawing}
-                        onMouseMove={(e) => {
-                            draw(e);
-                            const container = containerRef.current;
-                            if (!container) return;
-                            const rect = container.getBoundingClientRect();
-                            setCursorPreview({ x: e.clientX - rect.left, y: e.clientY - rect.top, visible: true });
-                        }}
-                        onMouseUp={stopDrawing}
-                        onMouseLeave={() => {
-                            stopDrawing();
-                            setCursorPreview(p => ({ ...p, visible: false }));
-                        }}
-                    >
-                        <canvas ref={imageCanvasRef} className="absolute inset-0 m-auto pointer-events-none" style={{ objectFit: 'contain', width: '100%', height: '100%' }} />
-                        <canvas ref={maskCanvasRef} className="absolute inset-0 m-auto pointer-events-none" style={{ objectFit: 'contain', width: '100%', height: '100%' }} />
-                        
-                        {cursorPreview.visible && (
-                             <div
-                                className="absolute pointer-events-none rounded-full border"
-                                style={{
-                                    left: cursorPreview.x,
-                                    top: cursorPreview.y,
-                                    width: brushSize,
-                                    height: brushSize,
-                                    transform: 'translate(-50%, -50%)',
-                                    borderColor: maskTool === 'brush' ? 'rgba(74, 222, 128, 0.8)' : 'rgba(239, 68, 68, 0.8)',
-                                    backgroundColor: maskTool === 'brush' ? `rgba(74, 222, 128, ${maskOpacity * 0.3})` : 'rgba(239, 68, 68, 0.2)'
-                                }}
-                            />
-                        )}
-                    </div>
-                    <div className="w-56 flex-shrink-0 flex flex-col gap-6 bg-zinc-900/50 p-4 rounded-md ring-1 ring-white/5">
-                        <div className="flex bg-zinc-800 p-1 rounded-md justify-center">
-                            <button onClick={() => setMaskTool('brush')} title="Pincel" className={`p-2 rounded transition-colors w-full flex items-center justify-center ${maskTool === 'brush' ? 'bg-zinc-700' : 'hover:bg-zinc-700/50'}`}>
-                                <Icons.Brush />
-                            </button>
-                            <button onClick={() => setMaskTool('eraser')} title="Borracha" className={`p-2 rounded transition-colors w-full flex items-center justify-center ${maskTool === 'eraser' ? 'bg-zinc-700' : 'hover:bg-zinc-700/50'}`}>
-                                <Icons.Eraser />
-                            </button>
-                             <button onClick={clearMask} className="p-2 rounded hover:bg-zinc-700/50 transition-colors w-full flex items-center justify-center" title="Limpar Seleção">
-                                <Icons.Deselect />
-                            </button>
-                        </div>
-                         <div className="flex flex-col gap-2">
-                            <label htmlFor="refBrushSize" className="text-sm text-zinc-300 whitespace-nowrap">Tamanho</label>
-                            <Slider
-                                value={brushSize} min={5} max={150}
-                                onChange={(e) => setBrushSize(parseInt(e.target.value, 10))}
-                                aria-label="Tamanho do Pincel"
-                                sliderWidthClass="w-full"
-                            />
-                        </div>
-                        <div className="flex flex-col gap-2">
-                            <label htmlFor="refMaskOpacity" className="text-sm text-zinc-300 whitespace-nowrap">Opacidade</label>
-                            <Slider
-                                value={maskOpacity * 100} min={10} max={100}
-                                onChange={(e) => setMaskOpacity(parseInt(e.target.value, 10) / 100)}
-                                aria-label="Opacidade da Máscara"
-                                sliderWidthClass="w-full"
-                            />
-                        </div>
-                        <div className="text-xs text-zinc-400 mt-auto p-2 bg-zinc-800/50 rounded-md">
-                            <p className="font-semibold mb-1">Dica:</p>
-                            <p>Pinte sobre a área que deseja usar na composição. Você não precisa ser perfeitamente preciso.</p>
-                        </div>
-                    </div>
-                </div>
-                <div className="flex justify-end gap-3 pt-4 flex-shrink-0 border-t border-zinc-800 mt-4">
-                    <button onClick={onClose} className="px-4 py-2 text-sm font-semibold rounded-md bg-zinc-800 hover:bg-zinc-700 transition-colors">
-                        Cancelar
-                    </button>
-                    <button onClick={handleSave} className="px-4 py-2 text-sm font-semibold rounded-md bg-blue-600 hover:bg-blue-500 text-white transition-colors">
-                        Salvar Seleção
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-const ObjectPlacer = ({
-    placingObjectState,
-    onTransformChange,
-    onConfirm,
-    onCancel
-}: any) => {
-    const placerRef = useRef<HTMLDivElement>(null);
-    const actionRef = useRef<any>(null);
-
-    const handleMouseDown = (e: React.MouseEvent, action: string, cursor?: string) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        const rect = placerRef.current!.getBoundingClientRect();
-        const centerX = rect.left + rect.width / 2;
-        const centerY = rect.top + rect.height / 2;
-        const startAngle = Math.atan2(e.clientY - centerY, e.clientX - centerX) * (180 / Math.PI);
-
-        actionRef.current = {
-            action,
-            startX: e.clientX,
-            startY: e.clientY,
-            startWidth: placingObjectState.transform.width,
-            startHeight: placingObjectState.transform.height,
-            startLeft: placingObjectState.transform.x,
-            startTop: placingObjectState.transform.y,
-            startRotation: placingObjectState.transform.rotation,
-            startAngle,
-            aspectRatio: placingObjectState.transform.width / placingObjectState.transform.height,
         };
 
-        if (cursor) {
-            document.body.style.cursor = cursor;
-        }
+        originalImage.onload = onImageLoad;
+        aiResultImage.onload = onImageLoad;
+        maskImage.onload = onImageLoad;
 
-        window.addEventListener('mousemove', handleMouseMove);
-        window.addEventListener('mouseup', handleMouseUp);
-    };
+        originalImage.onerror = onImageError;
+        aiResultImage.onerror = onImageError;
+        maskImage.onerror = onImageError;
 
-    const handleMouseMove = (e: MouseEvent) => {
-        if (!actionRef.current) return;
-        const { action, startX, startY, startLeft, startTop, startWidth, startHeight, startRotation, startAngle, aspectRatio } = actionRef.current;
-        let newTransform = { ...placingObjectState.transform };
-
-        const dx = e.clientX - startX;
-        const dy = e.clientY - startY;
-
-        switch(action) {
-            case 'move':
-                newTransform.x = startLeft + dx;
-                newTransform.y = startTop + dy;
-                break;
-            case 'rotate': {
-                 const rect = placerRef.current!.getBoundingClientRect();
-                 const centerX = rect.left + rect.width / 2;
-                 const centerY = rect.top + rect.height / 2;
-                 const currentAngle = Math.atan2(e.clientY - centerY, e.clientX - centerX) * (180 / Math.PI);
-                 newTransform.rotation = startRotation + (currentAngle - startAngle);
-                break;
-            }
-            case 'resize-br': {
-                const newWidth = startWidth + dx;
-                const newHeight = newWidth / aspectRatio;
-                newTransform.width = Math.max(20, newWidth);
-                newTransform.height = Math.max(20, newHeight);
-                break;
-            }
-        }
-        onTransformChange(newTransform);
-    };
-
-    const handleMouseUp = () => {
-        actionRef.current = null;
-        document.body.style.cursor = 'default';
-        window.removeEventListener('mousemove', handleMouseMove);
-        window.removeEventListener('mouseup', handleMouseUp);
-    };
-
-    return (
-        <div
-            ref={placerRef}
-            className="absolute z-30"
-            style={{
-                left: placingObjectState.transform.x,
-                top: placingObjectState.transform.y,
-                width: placingObjectState.transform.width,
-                height: placingObjectState.transform.height,
-                transform: `rotate(${placingObjectState.transform.rotation}deg)`,
-                cursor: 'move',
-            }}
-            onMouseDown={(e) => handleMouseDown(e, 'move')}
-        >
-            <div className="absolute inset-0 border-2 border-dashed border-blue-400 pointer-events-none">
-                <img src={placingObjectState.previewUrl} className="w-full h-full" alt="Object to place" />
-            </div>
-            
-            <div
-                className="absolute -top-6 left-1/2 -translate-x-1/2 w-4 h-4 bg-blue-400 rounded-full cursor-alias"
-                onMouseDown={(e) => handleMouseDown(e, 'rotate', 'alias')}
-            />
-            <div
-                className="absolute -bottom-2 -right-2 w-4 h-4 bg-blue-400 rounded-full cursor-se-resize border-2 border-zinc-900"
-                onMouseDown={(e) => handleMouseDown(e, 'resize-br', 'se-resize')}
-            />
-
-             <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 flex gap-2" onMouseDown={e => e.stopPropagation()}>
-                <button onClick={onCancel} className="px-3 py-1 text-sm rounded-md bg-zinc-800 hover:bg-zinc-700 transition-colors">Cancelar</button>
-                <button onClick={onConfirm} className="px-3 py-1 text-sm rounded-md bg-blue-600 hover:bg-blue-500 text-white transition-colors">Confirmar</button>
-            </div>
-        </div>
-    );
+        originalImage.src = originalImageUrl;
+        aiResultImage.src = aiResultUrl;
+        maskImage.src = maskUrl;
+    });
 };
 
 export default function App() {
@@ -1319,19 +870,15 @@ export default function App() {
     const [isDragging, setIsDragging] = useState<boolean>(false);
     const [dragTarget, setDragTarget] = useState<'main' | 'reference' | null>(null);
     const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([]);
-    const [activeLeftPanelTab, setActiveLeftPanelTab] = useState<'properties' | 'history'>('properties');
     
     // Dialogs & Modals state
     const [confirmationDialog, setConfirmationDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
-    const [editingReferenceIndex, setEditingReferenceIndex] = useState<number | null>(null);
-
+    
     // Editor-specific state
     const [maskTool, setMaskTool] = useState<'brush' | 'eraser'>('brush');
     const [brushSize, setBrushSize] = useState(40);
     const [maskOpacity, setMaskOpacity] = useState(0.6);
     const [editorZoom, setEditorZoom] = useState(100);
-    const [isPlacingObject, setIsPlacingObject] = useState<boolean>(false);
-    const [placingObjectState, setPlacingObjectState] = useState<any>(null);
     
     // Refs
     const editorRef = useRef<ImageEditorRef>(null);
@@ -1393,7 +940,7 @@ export default function App() {
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (mode !== 'edit' || activeEditFunction !== 'compose' || isPlacingObject || editingReferenceIndex !== null) return;
+            if (mode !== 'edit' || activeEditFunction !== 'compose') return;
 
             const activeEl = document.activeElement;
             if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) return;
@@ -1414,7 +961,7 @@ export default function App() {
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
         };
-    }, [mode, activeEditFunction, isPlacingObject, editingReferenceIndex]);
+    }, [mode, activeEditFunction]);
 
 
     const resetImages = () => {
@@ -1441,7 +988,6 @@ export default function App() {
             setHistory([]);
             setHistoryIndex(-1);
             setPrompt('');
-            setActiveLeftPanelTab('properties');
         };
 
         if (newMode === 'create' && mode === 'edit' && history.length > 0) {
@@ -1458,7 +1004,6 @@ export default function App() {
             performSwitchToCreate();
         } else {
             setMode('edit');
-            setActiveLeftPanelTab('properties');
             resetImages();
             if (generatedImage) {
                 const currentEntry = history[historyIndex];
@@ -1487,14 +1032,12 @@ export default function App() {
             setActiveCreateFunction(entry.createFunction!);
             setAspectRatio(entry.aspectRatio!);
             resetImages(); 
-            setActiveLeftPanelTab('properties');
         } else { 
             setActiveEditFunction(entry.editFunction!);
             setReferenceImages(entry.referenceImages || []);
             if (entry.editFunction === 'style' && entry.styleStrength) {
                 setStyleStrength(entry.styleStrength);
             }
-            setActiveLeftPanelTab('properties');
         }
     }, [history]);
 
@@ -1666,53 +1209,6 @@ export default function App() {
         }
     };
 
-    const handleMainCanvasDrop = (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (dragLeaveTimeout.current) {
-            clearTimeout(dragLeaveTimeout.current);
-            dragLeaveTimeout.current = null;
-        }
-        const refIndexStr = e.dataTransfer.getData('ref-index');
-        
-        if (mode === 'edit' && activeEditFunction === 'compose' && refIndexStr && mainContentRef.current) {
-            dragCounter.current = 0;
-            setIsDragging(false);
-            setDragTarget(null);
-
-            const refIndex = parseInt(refIndexStr, 10);
-            const refImage = referenceImages[refIndex];
-            
-            if (refImage?.maskedObjectPreviewUrl) {
-                const editorRect = mainContentRef.current.getBoundingClientRect();
-                const dropX = e.clientX - editorRect.left;
-                const dropY = e.clientY - editorRect.top;
-
-                const img = new Image();
-                img.onload = () => {
-                    const aspectRatio = img.naturalWidth / img.naturalHeight;
-                    const initialWidth = 200;
-                    const initialHeight = initialWidth / aspectRatio;
-
-                    setPlacingObjectState({
-                        previewUrl: refImage.maskedObjectPreviewUrl,
-                        transform: {
-                            x: dropX - initialWidth / 2,
-                            y: dropY - initialHeight / 2,
-                            width: initialWidth,
-                            height: initialHeight,
-                            rotation: 0,
-                        },
-                    });
-                    setIsPlacingObject(true);
-                };
-                img.src = refImage.maskedObjectPreviewUrl;
-            }
-        } else {
-             handleDrop(e, 'main');
-        }
-    };
-
     const handleEasterEggClick = useCallback(async () => {
         if (isLoading || mode !== 'create') {
             return;
@@ -1739,7 +1235,6 @@ export default function App() {
                 const newHistory = history.slice(0, historyIndex + 1);
                 setHistory([...newHistory, newEntry]);
                 setHistoryIndex(newHistory.length);
-                setActiveLeftPanelTab('history');
             }
 
         } catch (error: any) {
@@ -1769,13 +1264,30 @@ export default function App() {
             } else { 
                 if (!generatedImage) throw new Error("Imagem para edição não encontrada.");
                 
-                const mask = editorRef.current?.getMaskData() ?? null;
+                const maskData = editorRef.current?.getMaskData() ?? null;
                 const originalSize = editorRef.current?.getOriginalImageSize() ?? null;
                 const mainImageBase64 = generatedImage.split(',')[1];
                 const mainImageMimeType = generatedImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
                 const mainImage: UploadedImage = { base64: mainImageBase64, mimeType: mainImageMimeType };
+                
+                const aiResultUrl = await processImagesWithPrompt(
+                    prompt,
+                    mainImage,
+                    referenceImages,
+                    maskData,
+                    activeEditFunction,
+                    originalSize,
+                    styleStrength
+                );
 
-                result = await processImagesWithPrompt(prompt, mainImage, referenceImages, mask, activeEditFunction, originalSize, styleStrength);
+                if (aiResultUrl) {
+                    if (activeEditFunction === 'compose' && maskData) {
+                        const maskUrl = `data:image/png;base64,${maskData.base64}`;
+                        result = await compositeImageWithMask(generatedImage, aiResultUrl, maskUrl);
+                    } else {
+                        result = aiResultUrl;
+                    }
+                }
             }
 
             if (result) {
@@ -1796,7 +1308,7 @@ export default function App() {
                 const newHistory = history.slice(0, historyIndex + 1);
                 setHistory([...newHistory, newEntry]);
                 setHistoryIndex(newHistory.length);
-                setActiveLeftPanelTab('history');
+                editorRef.current?.clearMask();
             }
 
         } catch (error: any) {
@@ -1834,7 +1346,7 @@ export default function App() {
 
     const handleRedo = () => {
         if (historyIndex < history.length - 1) {
-            handleHistoryNavigation(historyIndex + 1);
+            handleHistoryNavigation(historyIndex - 1);
         }
     };
 
@@ -1849,27 +1361,31 @@ export default function App() {
     };
 
     const performClearAll = () => {
+        // Common resets for both modes
         setHistory([]);
         setHistoryIndex(-1);
         setPrompt('');
-        setMode('create');
-        setActiveCreateFunction('free');
-        setAspectRatio('1:1');
         setReferenceImages([]);
         setError(null);
-        setActiveEditFunction('compose');
-        setStyleStrength(75);
-        setMaskTool('brush');
-        setBrushSize(40);
-        setMaskOpacity(0.6);
-        setIsPlacingObject(false);
-        setPlacingObjectState(null);
-        setNegativePrompt('');
-        setStyleModifier('default');
-        setCameraAngle('default');
-        setLightingStyle('default');
-        setActiveLeftPanelTab('properties');
         editorRef.current?.clearMask();
+        
+        if (mode === 'create') {
+            // Reset to default 'create' state
+            setActiveCreateFunction('free');
+            setAspectRatio('1:1');
+            setNegativePrompt('');
+            setStyleModifier('default');
+            setCameraAngle('default');
+            setLightingStyle('default');
+            // also reset edit mode settings for a clean slate when switching
+            setActiveEditFunction('compose');
+            setStyleStrength(75);
+            setMaskTool('brush');
+            setBrushSize(40);
+            setMaskOpacity(0.6);
+        }
+        // If in edit mode, we only perform the common resets,
+        // leaving the user in edit mode with their current function selected.
     };
 
     const handleClearAll = () => {
@@ -1885,31 +1401,52 @@ export default function App() {
 
     const finalPromptPreview = useMemo(() => {
         if (mode !== 'create' || !prompt) return null;
-        
-        let basePrompt = prompt;
-        let styleDescription = '';
-
+    
+        const promptParts: string[] = [];
+    
         switch (activeCreateFunction) {
             case 'sticker':
-                styleDescription = `A die-cut sticker of ${basePrompt}, ${styleModifier} style, with a thick white border, on a simple background.`;
+                promptParts.push(`A die-cut sticker of ${prompt}`);
+                if (styleModifier !== 'default') promptParts.push(`${styleModifier} style`);
+                promptParts.push("with a thick white border, on a simple background");
                 break;
             case 'text':
-                styleDescription = `A clean, vector-style logo featuring the text "${basePrompt}", ${styleModifier} design.`;
+                promptParts.push(`A clean, vector-style logo featuring the text "${prompt}"`);
+                if (styleModifier !== 'default') promptParts.push(`${styleModifier} design`);
                 break;
             case 'comic':
-                styleDescription = `A single comic book panel of ${basePrompt}, ${styleModifier} art style, vibrant colors, bold lines, dynamic action.`;
+                promptParts.push(`A single comic book panel of ${prompt}`);
+                if (styleModifier === 'noir comic') {
+                    promptParts.push("noir comic art style, black and white, high contrast, heavy shadows, halftone dot texture");
+                } else {
+                    if (styleModifier !== 'default') {
+                        promptParts.push(`${styleModifier} art style`);
+                    }
+                    promptParts.push("vibrant colors, bold lines, dynamic action");
+                }
                 break;
             case 'free':
             default:
-                styleDescription = `A cinematic, photorealistic image of ${basePrompt}, hyper-detailed, 8K resolution.`;
+                promptParts.push(`A cinematic, photorealistic image of ${prompt}`);
+                promptParts.push("hyper-detailed, 8K resolution");
                 break;
         }
+    
+        if (cameraAngle !== 'default') {
+            promptParts.push(`${cameraAngle} shot`);
+        }
+        if (lightingStyle !== 'default') {
+            promptParts.push(`${lightingStyle} lighting`);
+        }
+    
+        let finalPrompt = promptParts.join(', ');
 
-        if (cameraAngle !== 'default') styleDescription += `, ${cameraAngle} shot`;
-        if (lightingStyle !== 'default' && activeCreateFunction === 'free') styleDescription += `, ${lightingStyle} lighting`;
-        
-        return styleDescription;
-    }, [mode, prompt, activeCreateFunction, styleModifier, cameraAngle, lightingStyle]);
+        if (negativePrompt) {
+            finalPrompt += `. Evite o seguinte: ${negativePrompt}`;
+        }
+
+        return finalPrompt;
+    }, [mode, prompt, activeCreateFunction, styleModifier, cameraAngle, lightingStyle, negativePrompt]);
 
     const autoResizeTextarea = useCallback(() => {
         const textarea = textareaRef.current;
@@ -1966,20 +1503,6 @@ export default function App() {
                 onConfirm={handleConfirm}
                 onCancel={closeConfirmationDialog}
             />
-             <ReferenceMaskEditor
-                isOpen={editingReferenceIndex !== null}
-                imageSrc={editingReferenceIndex !== null ? referenceImages[editingReferenceIndex].previewUrl : ''}
-                onClose={() => setEditingReferenceIndex(null)}
-                onSave={(maskData, maskedObjectPreviewUrl) => {
-                    if (editingReferenceIndex !== null) {
-                    const updatedRefs = [...referenceImages];
-                    updatedRefs[editingReferenceIndex].mask = maskData;
-                    updatedRefs[editingReferenceIndex].maskedObjectPreviewUrl = maskedObjectPreviewUrl ?? undefined;
-                    setReferenceImages(updatedRefs);
-                    }
-                    setEditingReferenceIndex(null);
-                }}
-            />
             {showMobileModal && (
                 <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
                     <div className="bg-zinc-900 p-8 rounded-lg text-center max-w-sm">
@@ -2008,144 +1531,164 @@ export default function App() {
 
             {/* Consolidated Left Panel */}
             <div className="w-[320px] bg-zinc-900 flex flex-col border-r border-zinc-800">
-                <div className="h-12 flex-shrink-0 flex items-center border-b border-zinc-800 text-sm font-semibold">
-                    <button onClick={() => setActiveLeftPanelTab('properties')} className={`flex-1 h-full flex items-center justify-center gap-2 ${activeLeftPanelTab === 'properties' ? 'text-zinc-100 bg-zinc-800/50' : 'text-zinc-400 hover:bg-zinc-800/50'}`}>
-                        <Icons.Settings /> Propriedades
-                    </button>
-                    <button onClick={() => setActiveLeftPanelTab('history')} className={`flex-1 h-full flex items-center justify-center gap-2 ${activeLeftPanelTab === 'history' ? 'text-zinc-100 bg-zinc-800/50' : 'text-zinc-400 hover:bg-zinc-800/50'}`}>
-                        <Icons.History /> Histórico
-                    </button>
-                </div>
+                {/* Properties Area */}
                 <div className="flex-grow overflow-y-auto">
-                    {activeLeftPanelTab === 'properties' && (
-                         <>
-                            {mode === 'create' && (
-                                <>
-                                    <PanelSection title="Função Criativa" icon={<Icons.Sparkles />}>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <FunctionButton data-function="free" isActive={activeCreateFunction === 'free'} onClick={handleCreateFunctionClick} icon={<Icons.Image />} name="Livre" />
-                                            <FunctionButton data-function="sticker" isActive={activeCreateFunction === 'sticker'} onClick={handleCreateFunctionClick} icon={<Icons.Sticker />} name="Adesivo" />
-                                            <FunctionButton data-function="text" isActive={activeCreateFunction === 'text'} onClick={handleCreateFunctionClick} icon={<Icons.Type />} name="Logo" />
-                                            <FunctionButton data-function="comic" isActive={activeCreateFunction === 'comic'} onClick={handleCreateFunctionClick} icon={<Icons.Comic />} name="Quadrinho" />
+                    {mode === 'create' && (
+                        <>
+                            <PanelSection title="Função Criativa" icon={<Icons.Sparkles />}>
+                                <div className="grid grid-cols-4 gap-2">
+                                    <FunctionButton data-function="free" isActive={activeCreateFunction === 'free'} onClick={handleCreateFunctionClick} icon={<Icons.Image />} name="Livre" />
+                                    <FunctionButton data-function="sticker" isActive={activeCreateFunction === 'sticker'} onClick={handleCreateFunctionClick} icon={<Icons.Sticker />} name="Adesivo" />
+                                    <FunctionButton data-function="text" isActive={activeCreateFunction === 'text'} onClick={handleCreateFunctionClick} icon={<Icons.Type />} name="Logo" />
+                                    <FunctionButton data-function="comic" isActive={activeCreateFunction === 'comic'} onClick={handleCreateFunctionClick} icon={<Icons.Comic />} name="Quadrinho" />
+                                </div>
+                            </PanelSection>
+                            <PanelSection title="Proporção" icon={<Icons.AspectRatio />}>
+                                <div className="flex gap-2">
+                                    {['1:1', '16:9', '9:16', '4:3', '3:4'].map(ratio => (
+                                        <button key={ratio} onClick={() => handleAspectRatioChange(ratio)} className={`flex-1 text-center py-2 border rounded-md transition-colors text-sm ${aspectRatio === ratio ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800/50'}`}>
+                                            {ratio}
+                                        </button>
+                                    ))}
+                                </div>
+                            </PanelSection>
+                            <PanelSection title="Configurações Avançadas" icon={<Icons.Settings />}>
+                                <div className="space-y-4">
+                                    {styleOptions[activeCreateFunction].length > 0 && (
+                                        <div className="flex flex-col gap-2">
+                                            <label htmlFor="style-modifier-select" className="text-sm text-zinc-300">Estilo</label>
+                                            <div className="custom-select-wrapper">
+                                                <select id="style-modifier-select" value={styleModifier} onChange={(e) => setStyleModifier(e.target.value)} className="custom-select" aria-label="Modificador de estilo">
+                                                    {styleOptions[activeCreateFunction].map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                                </select>
+                                            </div>
                                         </div>
-                                    </PanelSection>
-                                    <PanelSection title="Proporção" icon={<Icons.AspectRatio />}>
-                                        <div className="grid grid-cols-3 gap-2">
-                                            {['1:1', '16:9', '9:16', '4:3', '3:4'].map(ratio => (
-                                                <button key={ratio} onClick={() => handleAspectRatioChange(ratio)} className={`p-2 border rounded-md transition-colors text-xs ${aspectRatio === ratio ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800/50'}`}>
-                                                    {ratio}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </PanelSection>
-                                    <PanelSection title="Configurações Avançadas" icon={<Icons.Settings />} defaultOpen={false}>
-                                        <div className="space-y-4">
-                                            {styleOptions[activeCreateFunction].length > 0 && (
+                                    )}
+                                    {activeCreateFunction === 'free' && (
+                                        <>
+                                            <div className="flex flex-col gap-2">
+                                                <label htmlFor="camera-angle-select" className="text-sm text-zinc-300">Ângulo da Câmera</label>
                                                 <div className="custom-select-wrapper">
-                                                    <select value={styleModifier} onChange={(e) => setStyleModifier(e.target.value)} className="custom-select" aria-label="Modificador de estilo">
-                                                        {styleOptions[activeCreateFunction].map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                                    <select id="camera-angle-select" value={cameraAngle} onChange={(e) => setCameraAngle(e.target.value)} className="custom-select" aria-label="Ângulo da câmera">
+                                                        {cameraAngleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                                                     </select>
                                                 </div>
-                                            )}
-                                            {activeCreateFunction === 'free' && (
-                                                <>
-                                                    <div className="custom-select-wrapper">
-                                                        <select value={cameraAngle} onChange={(e) => setCameraAngle(e.target.value)} className="custom-select" aria-label="Ângulo da câmera">
-                                                            {cameraAngleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                                                        </select>
-                                                    </div>
-                                                    <div className="custom-select-wrapper">
-                                                        <select value={lightingStyle} onChange={(e) => setLightingStyle(e.target.value)} className="custom-select" aria-label="Estilo de iluminação">
-                                                            {lightingStyleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                                                        </select>
-                                                    </div>
-                                                </>
-                                            )}
-                                            <textarea
-                                                value={negativePrompt}
-                                                onChange={(e) => setNegativePrompt(e.target.value)}
-                                                placeholder="Prompt Negativo (opcional): e.g., 'texto, marcas d'água'"
-                                                className="w-full bg-zinc-800 p-2 rounded-md text-sm placeholder-zinc-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                                                rows={2}
-                                            />
-                                            {finalPromptPreview && (
-                                                <div className="text-xs text-zinc-400 p-2 bg-zinc-800/50 rounded-md">
-                                                    <p className="font-semibold mb-1">Prompt Final:</p>
-                                                    <p>{finalPromptPreview}</p>
+                                            </div>
+                                            <div className="flex flex-col gap-2">
+                                                <label htmlFor="lighting-style-select" className="text-sm text-zinc-300">Estilo de Iluminação</label>
+                                                <div className="custom-select-wrapper">
+                                                    <select id="lighting-style-select" value={lightingStyle} onChange={(e) => setLightingStyle(e.target.value)} className="custom-select" aria-label="Estilo de iluminação">
+                                                        {lightingStyleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                                    </select>
                                                 </div>
-                                            )}
-                                        </div>
-                                    </PanelSection>
-                                </>
-                            )}
-                            {mode === 'edit' && (
-                                <>
-                                    <PanelSection title="Função de Edição" icon={<Icons.Layers />}>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <FunctionButton data-function="compose" isActive={activeEditFunction === 'compose'} onClick={handleEditFunctionClick} icon={<Icons.Layers />} name="Composição" />
-                                            <FunctionButton data-function="style" isActive={activeEditFunction === 'style'} onClick={handleEditFunctionClick} icon={<Icons.Palette />} name="Estilo" />
-                                        </div>
-                                    </PanelSection>
-                                    {activeEditFunction === 'style' && (
-                                        <PanelSection title="Intensidade do Estilo" icon={<Icons.Sliders />}>
-                                            <Slider
-                                                value={styleStrength}
-                                                min={10} max={100}
-                                                onChange={(e) => setStyleStrength(parseInt(e.target.value, 10))}
-                                                aria-label="Intensidade do estilo"
-                                                sliderWidthClass="w-full"
-                                            />
-                                        </PanelSection>
+                                            </div>
+                                        </>
                                     )}
-                                    <PanelSection title="Referências" icon={<Icons.Reference />}>
-                                        <div onDragEnter={(e) => handleDragEnter(e, 'reference')} onDragLeave={handleDragLeave} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, 'reference')}>
-                                            <div className={`border-2 rounded-md transition-all duration-200 ${dragTarget === 'reference' ? 'border-blue-500 bg-blue-500/10 border-solid scale-105' : 'border-zinc-800 border-dashed'}`}>
-                                                <input type="file" id="reference-upload" className="hidden" multiple accept="image/png, image/jpeg, image/webp" onChange={(e) => handleImageUpload(e.target.files, 'reference')} disabled={mode !== 'edit'} />
-                                                <label htmlFor="reference-upload" className={`${mode !== 'edit' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} flex items-center justify-center gap-2 text-center p-2`}>
-                                                    <Icons.UploadCloud className="text-2xl text-zinc-500" />
-                                                    <span className="text-xs">Arraste ou clique para enviar</span>
-                                                </label>
-                                            </div>
-                                            {mode === 'edit' && activeEditFunction === 'style' && <p className="text-xs text-zinc-500 text-center mt-2">(Máximo de 1 imagem de estilo)</p>}
-                                            <div className="mt-4 space-y-2">
-                                                {referenceImages.map((ref, index) => (
-                                                    <div key={index} className="flex items-center gap-2 p-2 bg-zinc-800 rounded-md" draggable onDragStart={(e) => { if (ref.maskedObjectPreviewUrl) { e.dataTransfer.setData('ref-index', index.toString()); } }}>
-                                                        <img src={ref.maskedObjectPreviewUrl || ref.previewUrl} alt={`Reference ${index + 1}`} className={`w-10 h-10 object-cover rounded ${ref.maskedObjectPreviewUrl ? 'cursor-grab' : 'cursor-default'}`} />
-                                                        <span className="text-xs flex-1 truncate">Referência {index + 1}</span>
-                                                        {activeEditFunction === 'compose' && ( <button onClick={() => setEditingReferenceIndex(index)} className="p-1 hover:bg-zinc-700 rounded" title="Selecionar objeto"> <Icons.Select /> </button> )}
-                                                        <button onClick={() => handleRemoveImage(index)} className="p-1 text-red-400 hover:bg-zinc-700 rounded" title="Remover"> <Icons.Close className="text-base" /> </button>
-                                                    </div>
-                                                ))}
-                                            </div>
+                                    <div className="flex flex-col gap-2">
+                                        <label htmlFor="negative-prompt-input" className="text-sm text-zinc-300">Prompt Negativo (Opcional)</label>
+                                        <textarea
+                                            id="negative-prompt-input"
+                                            value={negativePrompt}
+                                            onChange={(e) => setNegativePrompt(e.target.value)}
+                                            placeholder="Ex: 'texto, marcas d'água, baixa qualidade'"
+                                            className="w-full bg-zinc-800 p-2 rounded-md text-sm placeholder-zinc-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                                            rows={2}
+                                        />
+                                    </div>
+                                    {finalPromptPreview && (
+                                        <div className="text-xs text-zinc-400 p-2 bg-zinc-800/50 rounded-md">
+                                            <p className="font-semibold mb-1">Prompt Final:</p>
+                                            <p>{finalPromptPreview}</p>
                                         </div>
-                                    </PanelSection>
-                                </>
-                            )}
+                                    )}
+                                </div>
+                            </PanelSection>
                         </>
                     )}
-                    
-                    {activeLeftPanelTab === 'history' && (
-                        <div className="p-3 space-y-2">
-                            {history.length === 0 ? (
-                                <p className="text-xs text-zinc-500 text-center py-4">Nenhuma ação registrada.</p>
-                            ) : (
-                                [...history].reverse().map((entry, revIndex) => {
-                                    const index = history.length - 1 - revIndex;
-                                    return (
-                                    <button key={entry.id} onClick={() => handleHistoryNavigation(index)} className={`w-full flex items-center gap-3 p-2 rounded-md text-left transition-colors ${historyIndex === index ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}`}>
-                                        <img src={entry.imageUrl} alt="" className="w-10 h-10 object-cover rounded-md flex-shrink-0 bg-zinc-700" />
-                                        <div className="flex-1 min-w-0">
-                                            <p className="text-xs font-semibold truncate">{getHistoryEntryTitle(entry)}</p>
-                                            <p className="text-xs text-zinc-400 truncate">{entry.prompt || 'Imagem inicial'}</p>
-                                        </div>
-                                    </button>
-                                )})
+                    {mode === 'edit' && (
+                        <>
+                            <PanelSection title="Função de Edição" icon={<Icons.Layers />}>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <FunctionButton data-function="compose" isActive={activeEditFunction === 'compose'} onClick={handleEditFunctionClick} icon={<Icons.Layers />} name="Composição" />
+                                    <FunctionButton data-function="style" isActive={activeEditFunction === 'style'} onClick={handleEditFunctionClick} icon={<Icons.Palette />} name="Estilo" />
+                                </div>
+                            </PanelSection>
+                            {activeEditFunction === 'style' && (
+                                <PanelSection title="Intensidade do Estilo" icon={<Icons.Sliders />}>
+                                    <Slider
+                                        value={styleStrength}
+                                        min={10} max={100}
+                                        onChange={(e) => setStyleStrength(parseInt(e.target.value, 10))}
+                                        aria-label="Intensidade do estilo"
+                                        sliderWidthClass="w-full"
+                                    />
+                                </PanelSection>
                             )}
-                        </div>
+                            <PanelSection title="Referências" icon={<Icons.Reference />}>
+                                <div onDragEnter={(e) => handleDragEnter(e, 'reference')} onDragLeave={handleDragLeave} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, 'reference')}>
+                                    <div className={`border-2 rounded-md transition-all duration-200 ${dragTarget === 'reference' ? 'border-blue-500 bg-blue-500/10 border-solid scale-105' : 'border-zinc-800 border-dashed'}`}>
+                                        <input type="file" id="reference-upload" className="hidden" multiple accept="image/png, image/jpeg, image/webp" onChange={(e) => handleImageUpload(e.target.files, 'reference')} disabled={mode !== 'edit'} />
+                                        <label htmlFor="reference-upload" className={`${mode !== 'edit' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} flex items-center justify-center gap-2 text-center p-2`}>
+                                            <Icons.UploadCloud className="text-2xl text-zinc-500" />
+                                            <span className="text-xs">Arraste ou clique para enviar</span>
+                                        </label>
+                                    </div>
+                                    {mode === 'edit' && activeEditFunction === 'style' && <p className="text-xs text-zinc-500 text-center mt-2">(Máximo de 1 imagem de estilo)</p>}
+                                    <div className="mt-4 grid grid-cols-3 gap-2">
+                                        {referenceImages.map((ref, index) => (
+                                            <div
+                                                key={index}
+                                                className="relative group aspect-square bg-zinc-800 rounded-md overflow-hidden"
+                                            >
+                                                <img
+                                                    src={ref.previewUrl}
+                                                    alt={`Reference ${index + 1}`}
+                                                    className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                                                />
+                                                <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                                                    <button
+                                                        onClick={() => handleRemoveImage(index)}
+                                                        className="p-2 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700 transition-colors"
+                                                        title="Remover"
+                                                    >
+                                                        <Icons.Close className="text-lg" />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </PanelSection>
+                        </>
                     )}
                 </div>
+
+                {/* History Area */}
+                <div className="flex-shrink-0 h-56 border-y border-zinc-800 flex flex-col bg-zinc-900/50">
+                    <h3 className="p-3 text-sm font-semibold text-zinc-300 flex items-center gap-2 border-b border-zinc-800 flex-shrink-0">
+                        <Icons.History className="text-xl" /> Histórico
+                    </h3>
+                    <div className="flex-grow overflow-y-auto p-3 space-y-2">
+                        {history.length === 0 ? (
+                            <p className="text-xs text-zinc-500 text-center py-4">Nenhuma ação registrada.</p>
+                        ) : (
+                            [...history].reverse().map((entry, revIndex) => {
+                                const index = history.length - 1 - revIndex;
+                                return (
+                                <button key={entry.id} onClick={() => handleHistoryNavigation(index)} className={`w-full flex items-center gap-3 p-2 rounded-md text-left transition-colors ${historyIndex === index ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}`}>
+                                    <img src={entry.imageUrl} alt="" className="w-10 h-10 object-cover rounded-md flex-shrink-0 bg-zinc-700" />
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-xs font-semibold truncate">{getHistoryEntryTitle(entry)}</p>
+                                        <p className="text-xs text-zinc-400 truncate">{entry.prompt || 'Imagem inicial'}</p>
+                                    </div>
+                                </button>
+                            )})
+                        )}
+                    </div>
+                </div>
+
                  {/* Prompt Area */}
-                <div className="flex-shrink-0 bg-zinc-900/50 border-t border-zinc-800 p-4">
+                <div className="flex-shrink-0 p-4">
                     <div className="w-full flex flex-col gap-3">
                          {error && (
                             <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm p-3 rounded-md flex items-start gap-2">
@@ -2171,17 +1714,7 @@ export default function App() {
                             title="Gerar (Ctrl+Enter)" 
                             className="w-full h-12 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold rounded-lg hover:from-blue-500 hover:to-indigo-500 transition-all duration-300 flex items-center justify-center gap-2 disabled:from-zinc-700 disabled:to-zinc-600 disabled:cursor-not-allowed transform active:scale-[0.99] shadow-lg hover:shadow-blue-500/30 disabled:shadow-none focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-zinc-900 focus:ring-blue-500"
                         >
-                            {isLoading ? (
-                                <>
-                                    <Icons.Spinner />
-                                    <span>Gerando...</span>
-                                </>
-                            ) : (
-                                <>
-                                    <span>Gerar</span>
-                                    <Icons.Send />
-                                </>
-                            )}
+                            <span>Gerar</span>
                         </button>
                     </div>
                 </div>
@@ -2194,7 +1727,7 @@ export default function App() {
                 onDragEnter={(e) => handleDragEnter(e, 'main')}
                 onDragLeave={handleDragLeave}
                 onDragOver={handleDragOver}
-                onDrop={handleMainCanvasDrop}
+                onDrop={(e) => handleDrop(e, 'main')}
             >
                 {isDragging && dragTarget === 'main' && (
                     <div className="absolute inset-0 bg-zinc-950/80 backdrop-blur-sm z-40 flex items-center justify-center pointer-events-none p-8">
@@ -2225,69 +1758,69 @@ export default function App() {
                 </div>
 
                 {/* Canvas Area */}
-                 <div className="relative flex-1 bg-zinc-950 min-h-0">
-                    {generatedImage ? (
-                        <ImageEditor
-                            ref={editorRef}
-                            src={generatedImage}
-                            isSelectionEnabled={mode === 'edit' && activeEditFunction === 'compose' && !isPlacingObject}
-                            maskTool={maskTool}
-                            brushSize={brushSize}
-                            maskOpacity={maskOpacity}
-                            onZoomChange={setEditorZoom}
-                        />
-                    ) : (
-                        <div className="w-full h-full flex items-center justify-center p-8">
-                            {mode === 'create' ? (
-                                <div className="text-center text-zinc-500">
-                                    <Icons.Sparkles className="mx-auto text-6xl" />
-                                    <h2 className="mt-4 text-lg font-semibold text-zinc-400">Pronto para criar algo incrível?</h2>
-                                    <p className="mt-1 text-sm">Descreva sua ideia e clique em "Gerar".</p>
+                 <div className="relative flex-1 flex flex-col bg-zinc-950 min-h-0 pt-4 px-4">
+                     {isLoading && (
+                        <div className="absolute inset-0 bg-zinc-950/80 backdrop-blur-sm z-40 flex items-center justify-center p-8">
+                            <div className="text-center">
+                                <Icons.Spinner className="h-12 w-12 mx-auto mb-4" />
+                                <h3 className="text-xl font-semibold text-zinc-200">Gerando sua imagem...</h3>
+                                <p className="text-zinc-400 mt-2">Aguarde um momento, a mágica está acontecendo.</p>
+                                <div className="flex justify-center items-center space-x-2 mt-4">
+                                    <div className="w-3 h-3 bg-blue-400 rounded-full animate-pulse-dots dot-1"></div>
+                                    <div className="w-3 h-3 bg-blue-400 rounded-full animate-pulse-dots dot-2"></div>
+                                    <div className="w-3 h-3 bg-blue-400 rounded-full animate-pulse-dots dot-3"></div>
                                 </div>
-                            ) : (
-                                 <label htmlFor="main-upload" className="w-full h-full flex items-center justify-center border-2 border-dashed border-zinc-800 rounded-xl cursor-pointer group hover:border-blue-500 transition-colors bg-zinc-900/50 hover:bg-blue-500/5">
-                                     <input type="file" id="main-upload" className="hidden" accept="image/png, image/jpeg, image/webp" onChange={(e) => handleImageUpload(e.target.files, 'main')} />
-                                    <div className="text-center text-zinc-500">
-                                        <Icons.UploadCloud className="mx-auto text-6xl text-zinc-400 group-hover:text-blue-500 transition-colors" />
-                                        <h2 className="mt-4 text-lg font-semibold text-zinc-400">Comece a Editar</h2>
-                                        <p className="mt-1 text-sm">Arraste e solte uma imagem aqui, ou <span className="font-semibold text-blue-400">clique para enviar</span>.</p>
-                                    </div>
-                                </label>
-                            )}
+                            </div>
                         </div>
                     )}
-                    {isPlacingObject && (
-                        <ObjectPlacer 
-                            placingObjectState={placingObjectState}
-                            onTransformChange={(newTransform: any) => setPlacingObjectState((prev: any) => ({ ...prev, transform: newTransform }))}
-                            onConfirm={() => {
-                                editorRef.current?.stampObjectOnMask({
-                                    previewUrl: placingObjectState.previewUrl,
-                                    transform: { placerTransform: placingObjectState.transform },
-                                    maskOpacity: 1
-                                });
-                                setIsPlacingObject(false);
-                                setPlacingObjectState(null);
-                            }}
-                            onCancel={() => {
-                                setIsPlacingObject(false);
-                                setPlacingObjectState(null);
-                            }}
-                        />
-                    )}
+                    <div className="flex-1 min-h-0">
+                        {generatedImage ? (
+                            <ImageEditor
+                                ref={editorRef}
+                                src={generatedImage}
+                                isSelectionEnabled={mode === 'edit' && activeEditFunction === 'compose'}
+                                maskTool={maskTool}
+                                brushSize={brushSize}
+                                maskOpacity={maskOpacity}
+                                onZoomChange={setEditorZoom}
+                            />
+                        ) : (
+                            <div className="w-full h-full flex justify-center">
+                                {mode === 'create' ? (
+                                    <div className="w-full h-full flex justify-center items-center border-2 border-dashed border-zinc-800 rounded-xl bg-zinc-900/50">
+                                        <div className="text-center text-zinc-500">
+                                            <Icons.Sparkles className="mx-auto text-6xl" />
+                                            <h2 className="mt-4 text-lg font-semibold text-zinc-400">Pronto para criar algo incrível?</h2>
+                                            <p className="mt-1 text-sm">Descreva sua ideia e clique em "Gerar".</p>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <label htmlFor="main-upload" className="w-full h-full flex justify-center items-center border-2 border-dashed border-zinc-800 rounded-xl cursor-pointer group hover:border-blue-500 transition-colors bg-zinc-900/50 hover:bg-blue-500/5">
+                                        <input type="file" id="main-upload" className="hidden" accept="image/png, image/jpeg, image/webp" onChange={(e) => handleImageUpload(e.target.files, 'main')} />
+                                        <div className="text-center text-zinc-500">
+                                            <Icons.UploadCloud className="mx-auto text-6xl text-zinc-400 group-hover:text-blue-500 transition-colors" />
+                                            <h2 className="mt-4 text-lg font-semibold text-zinc-400">Comece a Editar</h2>
+                                            <p className="mt-1 text-sm">Arraste e solte uma imagem aqui, ou <span className="font-semibold text-blue-400">clique para enviar</span>.</p>
+                                        </div>
+                                    </label>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                    <div className="h-20 flex-shrink-0" />
                     
-                    {mode === 'edit' && activeEditFunction === 'compose' && generatedImage && !isPlacingObject && (
+                    {mode === 'edit' && activeEditFunction === 'compose' && generatedImage && (
                          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-zinc-900/80 backdrop-blur-sm p-2 rounded-lg shadow-lg flex items-center gap-4 ring-1 ring-white/10">
-                            <div className="flex bg-zinc-800 p-1 rounded-md">
+                            <div className="flex bg-zinc-800 p-1 rounded-md items-center">
                                 <button onClick={() => setMaskTool('brush')} className={`p-2 rounded transition-colors ${maskTool === 'brush' ? 'bg-zinc-700' : 'hover:bg-zinc-700/50'}`} title="Pincel"> <Icons.Brush /> </button>
                                 <button onClick={() => setMaskTool('eraser')} className={`p-2 rounded transition-colors ${maskTool === 'eraser' ? 'bg-zinc-700' : 'hover:bg-zinc-700/50'}`} title="Borracha"> <Icons.Eraser /> </button>
+                                <div className="w-px h-6 bg-zinc-700 mx-1" />
+                                <button onClick={() => editorRef.current?.clearMask()} className="p-2 rounded transition-colors hover:bg-zinc-700/50" title="Limpar Seleção"> <Icons.Deselect /> </button>
                             </div>
                             <div className="w-px h-8 bg-zinc-700" />
                             <div className="flex items-center gap-3"> <span className="text-sm">Tamanho</span> <Slider value={brushSize} min={5} max={100} onChange={(e) => setBrushSize(parseInt(e.target.value, 10))} aria-label="Tamanho do Pincel" sliderWidthClass="w-32" /> </div>
                              <div className="w-px h-8 bg-zinc-700" />
                              <div className="flex items-center gap-3"> <span className="text-sm">Opacidade</span> <Slider value={maskOpacity * 100} min={10} max={100} onChange={(e) => setMaskOpacity(parseInt(e.target.value, 10) / 100)} aria-label="Opacidade da Máscara" sliderWidthClass="w-32" /> </div>
-                             <div className="w-px h-8 bg-zinc-700" />
-                             <button onClick={() => editorRef.current?.clearMask()} className="p-2 hover:bg-zinc-700/50 rounded-md transition-colors" title="Limpar Seleção"> <Icons.Deselect /> </button>
                          </div>
                     )}
 

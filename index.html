@@ -82,17 +82,10 @@
         box-shadow: 0 0 0 1px #a1a1aa; /* zinc-400 */
       }
 
-      /* Custom select for a flat, material design look */
+      /* Custom select for a modern look, consistent with other inputs */
       .custom-select-wrapper {
         position: relative;
         width: 100%;
-        background-color: #27272a; /* zinc-800 */
-        border-bottom: 1px solid #52525b; /* zinc-600 */
-        border-radius: 4px 4px 0 0;
-        transition: border-color 0.2s;
-      }
-      .custom-select-wrapper:focus-within {
-        border-bottom-color: #3b82f6; /* blue-500 */
       }
       .custom-select-wrapper::after {
         content: 'arrow_drop_down';
@@ -107,22 +100,28 @@
         color: #a1a1aa; /* zinc-400 */
         transition: color 0.2s;
       }
-      .custom-select-wrapper:focus-within::after {
-         color: #3b82f6; /* blue-500 */
-      }
       select.custom-select {
         -webkit-appearance: none;
         -moz-appearance: none;
         appearance: none;
         width: 100%;
-        padding: 0.5rem 2.5rem 0.5rem 0.5rem; /* 8px padding, with 40px on the right for the icon */
-        background-color: transparent;
-        border: none;
+        background-color: #27272a; /* bg-zinc-800 */
+        padding: 0.5rem 2.5rem 0.5rem 0.5rem; /* p-2, with room for arrow */
+        border-radius: 0.375rem; /* rounded-md */
+        font-size: 0.875rem; /* text-sm, to match textarea */
+        line-height: 1.25rem;
         color: #d4d4d8; /* zinc-300 */
-        font-size: 0.75rem; /* text-xs */
-        line-height: 1rem;
+        border: 1px solid #3f3f46; /* border-zinc-700 */
         cursor: pointer;
         outline: none;
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+      .custom-select-wrapper:focus-within select.custom-select {
+        border-color: #3b82f6; /* focus:ring-blue-500 */
+        box-shadow: 0 0 0 1px #3b82f6; /* focus:ring-1 */
+      }
+      .custom-select-wrapper:focus-within::after {
+         color: #3b82f6; /* blue-500 */
       }
       select.custom-select option {
         background-color: #18181b; /* zinc-900 */

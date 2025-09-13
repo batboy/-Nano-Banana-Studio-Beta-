@@ -29,43 +29,61 @@ export const generateImage = async (
     cameraAngle: string,
     lightingStyle: string
 ): Promise<string> => {
-    let basePrompt = prompt;
-    let styleDescription = '';
+    const promptParts: string[] = [];
 
+    // 1. Construir a base do prompt com base na função
     switch (createFunction) {
         case 'sticker':
-            styleDescription = `A die-cut sticker of ${basePrompt}, ${styleModifier} style, with a thick white border, on a simple background.`;
+            promptParts.push(`A die-cut sticker of ${prompt}`);
+            if (styleModifier !== 'default') promptParts.push(`${styleModifier} style`);
+            promptParts.push("with a thick white border, on a simple background");
             break;
         case 'text':
-             styleDescription = `A clean, vector-style logo featuring the text "${basePrompt}", ${styleModifier} design.`;
+            promptParts.push(`A clean, vector-style logo featuring the text "${prompt}"`);
+            if (styleModifier !== 'default') promptParts.push(`${styleModifier} design`);
             break;
         case 'comic':
-             styleDescription = `A single comic book panel of ${basePrompt}, ${styleModifier} art style, vibrant colors, bold lines, dynamic action.`;
+            promptParts.push(`A single comic book panel of ${prompt}`);
+            if (styleModifier === 'noir comic') {
+                promptParts.push("noir comic art style, black and white, high contrast, heavy shadows, halftone dot texture");
+            } else {
+                if (styleModifier !== 'default') {
+                    promptParts.push(`${styleModifier} art style`);
+                }
+                promptParts.push("vibrant colors, bold lines, dynamic action");
+            }
             break;
         case 'free':
         default:
-             styleDescription = `A cinematic, photorealistic image of ${basePrompt}, hyper-detailed, 8K resolution.`;
+            promptParts.push(`A cinematic, photorealistic image of ${prompt}`);
+            promptParts.push("hyper-detailed, 8K resolution");
             break;
     }
     
-    // Append camera and lighting modifiers if they are not 'default'
+    // 2. Anexar modificadores avançados se não forem padrão
     if (cameraAngle !== 'default') {
-        styleDescription += `, ${cameraAngle} shot`;
+        promptParts.push(`${cameraAngle} shot`);
     }
     if (lightingStyle !== 'default') {
-        styleDescription += `, ${lightingStyle} lighting`;
+        promptParts.push(`${lightingStyle} lighting`);
+    }
+
+    let finalPrompt = promptParts.join(', ');
+
+    // 3. Adicionar o prompt negativo como uma instrução de texto
+    if (negativePrompt) {
+        finalPrompt += `. Evite o seguinte: ${negativePrompt}`;
     }
 
     let response;
     try {
         response = await ai.models.generateImages({
             model: 'imagen-4.0-generate-001',
-            prompt: styleDescription,
+            prompt: finalPrompt,
             config: {
                 numberOfImages: 1,
                 outputMimeType: 'image/png',
                 aspectRatio: aspectRatio,
-                ...(negativePrompt && { negativePrompt }),
             },
         });
     } catch (e: any) {
@@ -175,39 +193,66 @@ The user provides this additional guidance for the content: "${userRequest}".
         });
         
         // --- PROMPT LOGIC ---
-        let userRequest: string;
-        let contextInstructions: string = '';
-        const maskProvided = !!mask;
+        const userRequest: string = prompt || "Realize a edição conforme instruído pelas imagens e máscaras.";
+        const mainMaskProvided = !!mask;
+        const referenceObjectProvided = referenceImages.length > 0 && !!referenceImages[0].mask;
 
-        userRequest = prompt || (referenceImages.length > 0 ? "Una os elementos das imagens de forma criativa e realista." : "Aplique a edição solicitada na área selecionada.");
-        if (!userRequest && !referenceImages.length) {
-            throw new Error("Por favor, descreva a edição que você deseja fazer ou adicione uma imagem de referência.");
+        // Throw an error if there is absolutely no input for the model to work with
+        if (!prompt && !mainMaskProvided && referenceImages.length === 0) {
+            throw new Error("Por favor, descreva a edição, selecione uma área na imagem principal ou adicione uma imagem de referência para começar a editar.");
         }
         
-        contextInstructions = `
-**OPERATION: Object Insertion**
+        let contextInstructions: string;
 
-**RULE #1 (ABSOLUTE):** The output image MUST be identical to the first input image (BASE_IMAGE) in every area that is BLACK in the second input image (MAIN_MASK). Do NOT change the background, lighting, or style of the original scene. Any change outside the WHITE area of the MAIN_MASK is a critical failure.
+        if (mainMaskProvided && referenceObjectProvided) {
+            // Case 1: Object Insertion. User has masked an area on the main image AND provided a masked reference object.
+            contextInstructions = `
+**OPERATION: Precision Object Compositing**
+**PRIMARY GOAL:** Insert an object from a reference image into a masked area of the base image without altering ANY other part of the base image.
 
-**INPUTS:**
-- **Image 1 (BASE_IMAGE):** The background scene.
-- **Image 2 (MAIN_MASK):** The target area for insertion, marked in WHITE.
-- **Image 3 (REFERENCE_IMAGE):** Contains the object to be inserted.
-- **Image 4 (REFERENCE_MASK):** Isolates the object to be extracted from Image 3, marked in WHITE.
-- (Additional reference images and masks may follow in pairs)
+**DIRETIVA CRÍTICA: PRESERVAÇÃO DO FUNDO**
+- A imagem de saída final DEVE ser idêntica pixel por pixel à primeira imagem de entrada (BASE_IMAGE) em todas as áreas onde a segunda imagem de entrada (MAIN_MASK) for PRETA.
+- Esta é uma regra não negociável. Qualquer alteração, mudança de cor ou re-renderização do fundo (a área com máscara preta) constitui uma falha completa.
+
+**ENTRADAS (em ordem):**
+1.  **BASE_IMAGE:** A cena principal. Este é o fundo que deve ser preservado.
+2.  **MAIN_MASK:** Uma máscara preta e branca. A área BRANCA é a *única* região onde as alterações são permitidas. A área PRETA deve permanecer intocada.
+3.  **REFERENCE_IMAGE:** Contém o objeto a ser inserido.
+4.  **REFERENCE_MASK:** Isola o objeto dentro da REFERENCE_IMAGE.
+
+**EXECUÇÃO PASSO A PASSO:**
+1.  **Extrair:** Isole o objeto da REFERENCE_IMAGE usando a REFERENCE_MASK.
+2.  **Posicionar:** Posicione o objeto extraído na área BRANCA definida pela MAIN_MASK sobre a BASE_IMAGE.
+3.  **Integrar:** Mescle perfeitamente o objeto inserido com a BASE_IMAGE. Este processo de mesclagem (ajuste de iluminação, sombras, cor, bordas) deve afetar APENAS os pixels *dentro* da área BRANCA da MAIN_MASK.
+4.  **Verificar:** Garanta que o fundo (tudo na área PRETA da MAIN_MASK) não foi alterado em relação à BASE_IMAGE original.
+
+**ORIENTAÇÃO DO USUÁRIO (aplica-se APENAS ao objeto inserido):**
+- "${userRequest}"
+`;
+        } else if (mainMaskProvided) {
+            // Case 2: Inpainting. User has masked an area on the main image and provided a text prompt.
+            contextInstructions = `
+**OPERATION: Masked Image Edit (Inpainting)**
+**PRIMARY GOAL:** Edit a specific region of an image based on a text prompt, leaving the rest untouched.
+
+**CRITICAL RULE:** The final output image MUST be identical to the first input image (BASE_IMAGE) in every area that is BLACK in the second input image (THE_MASK). Any change outside the WHITE area of THE_MASK is a failure.
+
+**INPUTS (in order):**
+1.  **BASE_IMAGE:** The image to be edited.
+2.  **THE_MASK:** The area to edit is marked in WHITE.
 
 **INSTRUCTIONS:**
-1.  Precisely extract the object from the REFERENCE_IMAGE using the REFERENCE_MASK.
-2.  Place the extracted object into the WHITE area of the MAIN_MASK on the BASE_IMAGE.
-3.  Integrate the object seamlessly. Adjust only the object's lighting and shadows to match the BASE_IMAGE.
-4.  The user provides this additional context for the integration: "${userRequest}". This context applies ONLY to the inserted object and the immediate blend area, NOT the entire scene.
-
-**GOAL:** The final image should look like the original BASE_IMAGE, but with the new object realistically added in the specified location.
+1.  Modify ONLY the area of the BASE_IMAGE that corresponds to the WHITE region in THE_MASK.
+2.  Implement the user's instruction for the edit: "${userRequest}".
+3.  If other reference images are provided (without masks), use them for stylistic inspiration for the inpainted area.
 `;
-        if (!maskProvided) {
-             contextInstructions = `
+        } else {
+            // Case 3: General Edit. No mask on the main image. Edits apply globally.
+            contextInstructions = `
 **OPERATION: General Image Edit**
-Follow the user's instructions to edit the image: "${userRequest}". Use the reference images provided for context or style if applicable.
+**PRIMARY GOAL:** Edit the entire image based on a user prompt and any reference images provided.
+**INSTRUCTIONS:**
+Follow the user's instructions to edit the image: "${userRequest}". Use the provided reference images for context, content, or style as applicable.
 `;
         }
         
