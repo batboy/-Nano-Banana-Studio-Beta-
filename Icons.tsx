@@ -37,9 +37,11 @@ export const Select = (props: React.HTMLAttributes<HTMLSpanElement>) => <Materia
 export const Selection = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="highlight_alt" {...props} />;
 export const ClearAll = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="delete_sweep" {...props} />;
 export const Settings = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="settings" {...props} />;
+export const Block = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="block" {...props} />;
 export const Close = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="close" {...props} />;
 export const Send = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="send" {...props} />;
 export const ChevronDown = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="expand_more" {...props} />;
+export const Transform = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="auto_fix_high" {...props} />;
 
 
 export const Spinner = ({ className, ...props }: React.HTMLAttributes<SVGSVGElement>) => (

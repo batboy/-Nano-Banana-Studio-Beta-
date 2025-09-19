@@ -1,6 +1,6 @@
 export type Mode = 'create' | 'edit';
 export type CreateFunction = 'free' | 'sticker' | 'text' | 'comic';
-export type EditFunction = 'compose' | 'style';
+export type EditFunction = 'compose' | 'style' | 'transform';
 
 export interface UploadedImage {
   base64: string;
@@ -21,10 +21,12 @@ export interface HistoryEntry {
   // Common state
   prompt: string;
   mode: Mode;
+  negativePrompt?: string;
   
   // Create mode state
   createFunction?: CreateFunction;
   aspectRatio?: string;
+  comicColorPalette?: 'vibrant' | 'noir';
   
   // Edit mode state
   editFunction?: EditFunction;

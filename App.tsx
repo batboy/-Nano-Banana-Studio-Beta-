@@ -1,6 +1,6 @@
 import React, { useState, useCallback, ChangeEvent, useEffect, useRef, useImperativeHandle, forwardRef, useMemo } from 'react';
 import type { Mode, CreateFunction, EditFunction, UploadedImage, HistoryEntry, UploadProgress, ReferenceImage } from './types';
-import { generateImage, processImagesWithPrompt } from './services/geminiService';
+import { generateImage, processImagesWithPrompt, analyzeImageStyle } from './services/geminiService';
 import * as Icons from './Icons';
 
 // Reusable Slider Component
@@ -857,14 +857,17 @@ export default function App() {
     const [styleModifier, setStyleModifier] = useState<string>('default');
     const [cameraAngle, setCameraAngle] = useState<string>('default');
     const [lightingStyle, setLightingStyle] = useState<string>('default');
+    const [comicColorPalette, setComicColorPalette] = useState<'vibrant' | 'noir'>('vibrant');
+
 
     // Edit mode state
     const [activeEditFunction, setActiveEditFunction] = useState<EditFunction>('compose');
     const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
-    const [styleStrength, setStyleStrength] = useState<number>(75);
+    const [styleStrength, setStyleStrength] = useState<number>(100);
 
     // UI & Loading state
     const [isLoading, setIsLoading] = useState<boolean>(false);
+    const [isAnalyzingStyle, setIsAnalyzingStyle] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [showMobileModal, setShowMobileModal] = useState<boolean>(false);
     const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -906,7 +909,6 @@ export default function App() {
         comic: [
             { value: 'American comic book', label: 'Americano' },
             { value: 'Japanese manga', label: 'Mangá' },
-            { value: 'noir comic', label: 'Noir' },
             { value: 'franco-belgian comics (bande dessinée)', label: 'Franco-Belga' },
         ],
     };
@@ -988,6 +990,7 @@ export default function App() {
             setHistory([]);
             setHistoryIndex(-1);
             setPrompt('');
+            setNegativePrompt('');
         };
 
         if (newMode === 'create' && mode === 'edit' && history.length > 0) {
@@ -1010,10 +1013,12 @@ export default function App() {
                 setHistory([currentEntry]);
                 setHistoryIndex(0);
                 setPrompt(currentEntry.prompt);
+                setNegativePrompt(currentEntry.negativePrompt || '');
             } else {
                 setHistory([]);
                 setHistoryIndex(-1);
                 setPrompt('');
+                setNegativePrompt('');
             }
         }
     };
@@ -1026,11 +1031,13 @@ export default function App() {
 
         setHistoryIndex(index);
         setPrompt(entry.prompt);
+        setNegativePrompt(entry.negativePrompt || '');
         setMode(entry.mode);
 
         if (entry.mode === 'create') {
             setActiveCreateFunction(entry.createFunction!);
             setAspectRatio(entry.aspectRatio!);
+            setComicColorPalette(entry.comicColorPalette || 'vibrant');
             resetImages(); 
         } else { 
             setActiveEditFunction(entry.editFunction!);
@@ -1103,7 +1110,7 @@ export default function App() {
                 setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
             };
 
-            reader.onload = () => {
+            reader.onload = async () => {
                 setUploadProgress(p => p.map(item => item.id === id ? { ...item, status: 'success', progress: 100 } : item));
                 
                 const dataUrl = reader.result as string;
@@ -1127,6 +1134,19 @@ export default function App() {
                     const newRefImage: ReferenceImage = { image: uploadedImage, previewUrl: dataUrl, mask: null };
                     if (activeEditFunction === 'style') {
                         setReferenceImages([newRefImage]);
+                        setIsAnalyzingStyle(true);
+                        setError(null);
+                        try {
+                            const styleDescription = await analyzeImageStyle(uploadedImage);
+                            if (styleDescription) {
+                                setPrompt(styleDescription);
+                            }
+                        } catch (analysisError) {
+                            console.error("Style analysis failed:", analysisError);
+                            setError("Não foi possível analisar o estilo da imagem de referência.");
+                        } finally {
+                            setIsAnalyzingStyle(false);
+                        }
                     } else {
                         setReferenceImages(prev => [...prev, newRefImage]);
                     }
@@ -1220,7 +1240,7 @@ export default function App() {
         setPrompt(easterEggPrompt);
 
         try {
-            const result = await generateImage(easterEggPrompt, 'free', aspectRatio, '', 'default', 'default', 'default');
+            const result = await generateImage(easterEggPrompt, 'free', aspectRatio, '', 'default', 'default', 'default', 'vibrant');
 
             if (result) {
                 const newEntry: HistoryEntry = {
@@ -1260,7 +1280,7 @@ export default function App() {
         try {
             let result: string | null = null;
             if (mode === 'create') {
-                result = await generateImage(prompt, activeCreateFunction, aspectRatio, negativePrompt, styleModifier, cameraAngle, lightingStyle);
+                result = await generateImage(prompt, activeCreateFunction, aspectRatio, negativePrompt, styleModifier, cameraAngle, lightingStyle, comicColorPalette);
             } else { 
                 if (!generatedImage) throw new Error("Imagem para edição não encontrada.");
                 
@@ -1277,7 +1297,8 @@ export default function App() {
                     maskData,
                     activeEditFunction,
                     originalSize,
-                    styleStrength
+                    styleStrength,
+                    negativePrompt
                 );
 
                 if (aiResultUrl) {
@@ -1296,8 +1317,13 @@ export default function App() {
                     imageUrl: result,
                     prompt,
                     mode,
+                    negativePrompt,
                     ...(mode === 'create'
-                      ? { createFunction: activeCreateFunction, aspectRatio }
+                      ? { 
+                          createFunction: activeCreateFunction, 
+                          aspectRatio,
+                          comicColorPalette: activeCreateFunction === 'comic' ? comicColorPalette : undefined,
+                        }
                       : { 
                           editFunction: activeEditFunction, 
                           referenceImages,
@@ -1311,12 +1337,13 @@ export default function App() {
                 editorRef.current?.clearMask();
             }
 
-        } catch (error: any) {
+        } catch (error: any)
+{
             setError(error.message || 'Ocorreu um erro desconhecido.');
         } finally {
             setIsLoading(false);
         }
-    }, [prompt, mode, activeCreateFunction, activeEditFunction, aspectRatio, referenceImages, history, historyIndex, generatedImage, styleStrength, negativePrompt, styleModifier, cameraAngle, lightingStyle]);
+    }, [prompt, mode, activeCreateFunction, activeEditFunction, aspectRatio, referenceImages, history, historyIndex, generatedImage, styleStrength, negativePrompt, styleModifier, cameraAngle, lightingStyle, comicColorPalette]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -1377,9 +1404,10 @@ export default function App() {
             setStyleModifier('default');
             setCameraAngle('default');
             setLightingStyle('default');
+            setComicColorPalette('vibrant');
             // also reset edit mode settings for a clean slate when switching
             setActiveEditFunction('compose');
-            setStyleStrength(75);
+            setStyleStrength(100);
             setMaskTool('brush');
             setBrushSize(40);
             setMaskOpacity(0.6);
@@ -1416,13 +1444,22 @@ export default function App() {
                 break;
             case 'comic':
                 promptParts.push(`A single comic book panel of ${prompt}`);
-                if (styleModifier === 'noir comic') {
-                    promptParts.push("noir comic art style, black and white, high contrast, heavy shadows, halftone dot texture");
+                if (styleModifier === 'Japanese manga') {
+                    promptParts.push('in a classic Japanese manga style');
+                    if (comicColorPalette === 'noir') {
+                        promptParts.push('black and white, high contrast, heavy use of screentones for shading and texture, dynamic inking with varied line weights, dramatic shadows, G-pen art style');
+                    } else { // vibrant
+                        promptParts.push('vibrant color palette typical of modern manga covers, cel-shading, bold and clean line art, dynamic composition, expressive characters');
+                    }
                 } else {
                     if (styleModifier !== 'default') {
                         promptParts.push(`${styleModifier} art style`);
                     }
-                    promptParts.push("vibrant colors, bold lines, dynamic action");
+                    if (comicColorPalette === 'noir') {
+                        promptParts.push("noir comic art style, black and white, high contrast, heavy shadows, halftone dot texture");
+                    } else { // vibrant
+                        promptParts.push("vibrant colors, bold lines, dynamic action");
+                    }
                 }
                 break;
             case 'free':
@@ -1446,7 +1483,7 @@ export default function App() {
         }
 
         return finalPrompt;
-    }, [mode, prompt, activeCreateFunction, styleModifier, cameraAngle, lightingStyle, negativePrompt]);
+    }, [mode, prompt, activeCreateFunction, styleModifier, cameraAngle, lightingStyle, negativePrompt, comicColorPalette]);
 
     const autoResizeTextarea = useCallback(() => {
         const textarea = textareaRef.current;
@@ -1480,6 +1517,7 @@ export default function App() {
             comic: 'Quadrinho',
             compose: 'Composição',
             style: 'Estilo',
+            transform: 'Transformação'
         };
     
         if (entry.mode === 'create') {
@@ -1490,6 +1528,19 @@ export default function App() {
         }
         return 'Imagem Carregada'; 
     };
+
+    const getEditPlaceholder = useCallback(() => {
+        switch (activeEditFunction) {
+            case 'compose':
+                return 'Descreva o que adicionar, remover ou alterar. Ex: "Adicione um chapéu de pirata no gato".';
+            case 'style':
+                return 'Opcional: Descreva como aplicar o estilo ou deixe em branco.';
+            case 'transform':
+                return 'Descreva a transformação. Ex: "Faça parecer uma pintura a óleo".';
+            default:
+                return 'Descreva a edição desejada.';
+        }
+    }, [activeEditFunction]);
 
     const isUndoDisabled = historyIndex <= 0;
     const isRedoDisabled = historyIndex >= history.length - 1;
@@ -1543,7 +1594,7 @@ export default function App() {
                                     <FunctionButton data-function="comic" isActive={activeCreateFunction === 'comic'} onClick={handleCreateFunctionClick} icon={<Icons.Comic />} name="Quadrinho" />
                                 </div>
                             </PanelSection>
-                            <PanelSection title="Proporção" icon={<Icons.AspectRatio />}>
+                            <PanelSection title="Proporção" icon={<Icons.AspectRatio className="text-base" />}>
                                 <div className="flex gap-2">
                                     {['1:1', '16:9', '9:16', '4:3', '3:4'].map(ratio => (
                                         <button key={ratio} onClick={() => handleAspectRatioChange(ratio)} className={`flex-1 text-center py-2 border rounded-md transition-colors text-sm ${aspectRatio === ratio ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800/50'}`}>
@@ -1552,7 +1603,7 @@ export default function App() {
                                     ))}
                                 </div>
                             </PanelSection>
-                            <PanelSection title="Configurações Avançadas" icon={<Icons.Settings />}>
+                            <PanelSection title="Configurações Avançadas" icon={<Icons.Settings className="text-base" />}>
                                 <div className="space-y-4">
                                     {styleOptions[activeCreateFunction].length > 0 && (
                                         <div className="flex flex-col gap-2">
@@ -1561,6 +1612,19 @@ export default function App() {
                                                 <select id="style-modifier-select" value={styleModifier} onChange={(e) => setStyleModifier(e.target.value)} className="custom-select" aria-label="Modificador de estilo">
                                                     {styleOptions[activeCreateFunction].map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                                                 </select>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {activeCreateFunction === 'comic' && (
+                                        <div className="flex flex-col gap-2">
+                                            <label className="text-sm text-zinc-300">Paleta de Cores</label>
+                                            <div className="flex gap-2">
+                                                <button onClick={() => setComicColorPalette('vibrant')} className={`flex-1 text-center py-2 border rounded-md transition-colors text-sm ${comicColorPalette === 'vibrant' ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800/50'}`}>
+                                                    Vibrante
+                                                </button>
+                                                <button onClick={() => setComicColorPalette('noir')} className={`flex-1 text-center py-2 border rounded-md transition-colors text-sm ${comicColorPalette === 'noir' ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800/50'}`}>
+                                                    Noir
+                                                </button>
                                             </div>
                                         </div>
                                     )}
@@ -1584,17 +1648,6 @@ export default function App() {
                                             </div>
                                         </>
                                     )}
-                                    <div className="flex flex-col gap-2">
-                                        <label htmlFor="negative-prompt-input" className="text-sm text-zinc-300">Prompt Negativo (Opcional)</label>
-                                        <textarea
-                                            id="negative-prompt-input"
-                                            value={negativePrompt}
-                                            onChange={(e) => setNegativePrompt(e.target.value)}
-                                            placeholder="Ex: 'texto, marcas d'água, baixa qualidade'"
-                                            className="w-full bg-zinc-800 p-2 rounded-md text-sm placeholder-zinc-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                                            rows={2}
-                                        />
-                                    </div>
                                     {finalPromptPreview && (
                                         <div className="text-xs text-zinc-400 p-2 bg-zinc-800/50 rounded-md">
                                             <p className="font-semibold mb-1">Prompt Final:</p>
@@ -1608,11 +1661,13 @@ export default function App() {
                     {mode === 'edit' && (
                         <>
                             <PanelSection title="Função de Edição" icon={<Icons.Layers />}>
-                                <div className="grid grid-cols-2 gap-2">
+                                <div className="grid grid-cols-3 gap-2">
                                     <FunctionButton data-function="compose" isActive={activeEditFunction === 'compose'} onClick={handleEditFunctionClick} icon={<Icons.Layers />} name="Composição" />
                                     <FunctionButton data-function="style" isActive={activeEditFunction === 'style'} onClick={handleEditFunctionClick} icon={<Icons.Palette />} name="Estilo" />
+                                    <FunctionButton data-function="transform" isActive={activeEditFunction === 'transform'} onClick={handleEditFunctionClick} icon={<Icons.Transform />} name="Transformar" />
                                 </div>
                             </PanelSection>
+                            
                             {activeEditFunction === 'style' && (
                                 <PanelSection title="Intensidade do Estilo" icon={<Icons.Sliders />}>
                                     <Slider
@@ -1624,68 +1679,94 @@ export default function App() {
                                     />
                                 </PanelSection>
                             )}
-                            <PanelSection title="Referências" icon={<Icons.Reference />}>
-                                <div onDragEnter={(e) => handleDragEnter(e, 'reference')} onDragLeave={handleDragLeave} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, 'reference')}>
-                                    <div className={`border-2 rounded-md transition-all duration-200 ${dragTarget === 'reference' ? 'border-blue-500 bg-blue-500/10 border-solid scale-105' : 'border-zinc-800 border-dashed'}`}>
-                                        <input type="file" id="reference-upload" className="hidden" multiple accept="image/png, image/jpeg, image/webp" onChange={(e) => handleImageUpload(e.target.files, 'reference')} disabled={mode !== 'edit'} />
-                                        <label htmlFor="reference-upload" className={`${mode !== 'edit' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} flex items-center justify-center gap-2 text-center p-2`}>
-                                            <Icons.UploadCloud className="text-2xl text-zinc-500" />
-                                            <span className="text-xs">Arraste ou clique para enviar</span>
-                                        </label>
-                                    </div>
-                                    {mode === 'edit' && activeEditFunction === 'style' && <p className="text-xs text-zinc-500 text-center mt-2">(Máximo de 1 imagem de estilo)</p>}
-                                    <div className="mt-4 grid grid-cols-3 gap-2">
-                                        {referenceImages.map((ref, index) => (
-                                            <div
-                                                key={index}
-                                                className="relative group aspect-square bg-zinc-800 rounded-md overflow-hidden"
-                                            >
-                                                <img
-                                                    src={ref.previewUrl}
-                                                    alt={`Reference ${index + 1}`}
-                                                    className="w-full h-full object-cover transition-transform group-hover:scale-105"
-                                                />
-                                                <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                                                    <button
-                                                        onClick={() => handleRemoveImage(index)}
-                                                        className="p-2 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700 transition-colors"
-                                                        title="Remover"
-                                                    >
-                                                        <Icons.Close className="text-lg" />
-                                                    </button>
+                            {activeEditFunction !== 'transform' && (
+                                <PanelSection title="Referências" icon={<Icons.Reference />}>
+                                    {isAnalyzingStyle && (
+                                        <div className="flex items-center gap-2 p-2 mb-3 rounded-md bg-zinc-800/50 text-sm text-zinc-300">
+                                            <Icons.Spinner className="h-4 w-4" />
+                                            <span>Analisando estilo da imagem...</span>
+                                        </div>
+                                    )}
+                                    <div onDragEnter={(e) => handleDragEnter(e, 'reference')} onDragLeave={handleDragLeave} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, 'reference')}>
+                                        <div className={`border-2 rounded-md transition-all duration-200 ${dragTarget === 'reference' ? 'border-blue-500 bg-blue-500/10 border-solid scale-105' : 'border-zinc-800 border-dashed'}`}>
+                                            <input type="file" id="reference-upload" className="hidden" multiple accept="image/png, image/jpeg, image/webp" onChange={(e) => handleImageUpload(e.target.files, 'reference')} disabled={mode !== 'edit'} />
+                                            <label htmlFor="reference-upload" className={`${mode !== 'edit' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} flex items-center justify-center gap-2 text-center p-2`}>
+                                                <Icons.UploadCloud className="text-2xl text-zinc-500" />
+                                                <span className="text-xs">Arraste ou clique para enviar</span>
+                                            </label>
+                                        </div>
+                                        {mode === 'edit' && activeEditFunction === 'style' && <p className="text-xs text-zinc-500 text-center mt-2">(Máximo de 1 imagem de estilo)</p>}
+                                        <div className="mt-4 grid grid-cols-3 gap-2">
+                                            {referenceImages.map((ref, index) => (
+                                                <div
+                                                    key={index}
+                                                    className="relative group aspect-square bg-zinc-800 rounded-md overflow-hidden"
+                                                >
+                                                    <img
+                                                        src={ref.previewUrl}
+                                                        alt={`Reference ${index + 1}`}
+                                                        className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                                                    />
+                                                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                                                        <button
+                                                            onClick={() => handleRemoveImage(index)}
+                                                            className="p-2 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700 transition-colors"
+                                                            title="Remover"
+                                                        >
+                                                            <Icons.Close className="text-lg" />
+                                                        </button>
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        ))}
+                                            ))}
+                                        </div>
                                     </div>
-                                </div>
-                            </PanelSection>
+                                </PanelSection>
+                            )}
                         </>
                     )}
                 </div>
 
                 {/* History Area */}
-                <div className="flex-shrink-0 h-56 border-y border-zinc-800 flex flex-col bg-zinc-900/50">
-                    <h3 className="p-3 text-sm font-semibold text-zinc-300 flex items-center gap-2 border-b border-zinc-800 flex-shrink-0">
-                        <Icons.History className="text-xl" /> Histórico
-                    </h3>
-                    <div className="flex-grow overflow-y-auto p-3 space-y-2">
-                        {history.length === 0 ? (
-                            <p className="text-xs text-zinc-500 text-center py-4">Nenhuma ação registrada.</p>
-                        ) : (
-                            [...history].reverse().map((entry, revIndex) => {
-                                const index = history.length - 1 - revIndex;
-                                return (
-                                <button key={entry.id} onClick={() => handleHistoryNavigation(index)} className={`w-full flex items-center gap-3 p-2 rounded-md text-left transition-colors ${historyIndex === index ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}`}>
-                                    <img src={entry.imageUrl} alt="" className="w-10 h-10 object-cover rounded-md flex-shrink-0 bg-zinc-700" />
-                                    <div className="flex-1 min-w-0">
-                                        <p className="text-xs font-semibold truncate">{getHistoryEntryTitle(entry)}</p>
-                                        <p className="text-xs text-zinc-400 truncate">{entry.prompt || 'Imagem inicial'}</p>
-                                    </div>
-                                </button>
-                            )})
-                        )}
-                    </div>
+                <div className="flex-shrink-0 border-t border-zinc-800 bg-zinc-900/50">
+                    <PanelSection title="Histórico" icon={<Icons.History className="text-xl" />} defaultOpen={false}>
+                        <div className="max-h-56 overflow-y-auto space-y-2">
+                            {history.length === 0 ? (
+                                <p className="text-xs text-zinc-500 text-center py-4">Nenhuma ação registrada.</p>
+                            ) : (
+                                [...history].reverse().map((entry, revIndex) => {
+                                    const index = history.length - 1 - revIndex;
+                                    return (
+                                    <button key={entry.id} onClick={() => handleHistoryNavigation(index)} className={`w-full flex items-center gap-3 p-2 rounded-md text-left transition-colors ${historyIndex === index ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}`}>
+                                        <img src={entry.imageUrl} alt="" className="w-10 h-10 object-cover rounded-md flex-shrink-0 bg-zinc-700" />
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-xs font-semibold truncate">{getHistoryEntryTitle(entry)}</p>
+                                            <p className="text-xs text-zinc-400 truncate">{entry.prompt || 'Imagem inicial'}</p>
+                                        </div>
+                                    </button>
+                                )})
+                            )}
+                        </div>
+                    </PanelSection>
                 </div>
+
+                {/* Negative Prompt Area */}
+                { (mode === 'create' || (mode === 'edit' && activeEditFunction === 'transform')) && (
+                    <div className="border-b border-zinc-800 p-3 space-y-3">
+                        <h3 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
+                            <Icons.Block className="text-base" />
+                            <span>Prompt Negativo (Opcional)</span>
+                        </h3>
+                         <textarea
+                            id="negative-prompt-input"
+                            value={negativePrompt}
+                            onChange={(e) => setNegativePrompt(e.target.value)}
+                            placeholder="Ex: texto, marcas d'água, baixa qualidade..."
+                            className="w-full bg-zinc-800 p-2 rounded-md text-sm placeholder-zinc-500 focus:ring-1 focus:ring-blue-500 focus:outline-none resize-none"
+                            rows={2}
+                            aria-label="Prompt Negativo"
+                        />
+                    </div>
+                )}
 
                  {/* Prompt Area */}
                 <div className="flex-shrink-0 p-4">
@@ -1696,15 +1777,20 @@ export default function App() {
                                 <span>{error}</span>
                             </div>
                         )}
-                        <div className="relative">
+                        <div className="flex flex-col gap-2">
+                             <label htmlFor="main-prompt-input" className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
+                                <Icons.Prompt />
+                                <span>Prompt Principal</span>
+                            </label>
                             <textarea
+                                id="main-prompt-input"
                                 ref={textareaRef}
                                 value={prompt}
                                 onChange={(e) => setPrompt(e.target.value)}
                                 onInput={autoResizeTextarea}
-                                placeholder={ mode === 'create' ? 'Descreva sua ideia... (ex: um astronauta surfando em uma onda cósmica)' : 'Descreva sua edição... (ex: adicione um chapéu de pirata no gato)' }
-                                className="w-full bg-zinc-800 p-3 rounded-lg text-sm placeholder-zinc-500 focus:ring-1 focus:ring-blue-500 focus:outline-none resize-none pr-4 min-h-[52px] max-h-48 transition-height duration-200"
-                                rows={1}
+                                placeholder={ mode === 'create' ? 'Descreva sua visão em detalhes: estilo, cores, cena, etc.' : getEditPlaceholder() }
+                                className="w-full bg-zinc-800 p-3 rounded-lg text-sm placeholder-zinc-500 focus:ring-1 focus:ring-blue-500 focus:outline-none resize-none pr-4 min-h-[90px] max-h-96 transition-height duration-200"
+                                rows={3}
                                 aria-label="Prompt principal"
                             />
                         </div>
@@ -1739,26 +1825,9 @@ export default function App() {
                         </div>
                     </div>
                 )}
-                {/* Top Toolbar */}
-                <div className="flex-shrink-0 h-12 bg-zinc-900 flex items-center justify-between px-4 border-b border-zinc-800">
-                    <div className="flex items-center gap-1">
-                        <button onClick={handleUndo} disabled={isUndoDisabled} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Desfazer (Ctrl+Z)"> <Icons.Undo /> </button>
-                        <button onClick={handleRedo} disabled={isRedoDisabled} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Refazer (Ctrl+Y)"> <Icons.Redo /> </button>
-                        <div className="w-px h-6 bg-zinc-800 mx-2" />
-                         <button onClick={handleClearAll} className="p-2 hover:bg-zinc-800 rounded-md" title="Limpar Tudo"> <Icons.ClearAll /> </button>
-                        <button onClick={handleSaveImage} disabled={!generatedImage} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Salvar Imagem"> <Icons.Save /> </button>
-                    </div>
-                    <div className="flex items-center gap-2 text-sm">
-                        <button onClick={() => editorRef.current?.zoomOut()} className="p-2 hover:bg-zinc-800 rounded-md" title="Diminuir Zoom"> <Icons.ZoomOut /> </button>
-                        <div className="w-20 text-center cursor-pointer" onClick={() => editorRef.current?.zoomToFit()}> {Math.round(editorZoom)}% </div>
-                        <button onClick={() => editorRef.current?.zoomIn()} className="p-2 hover:bg-zinc-800 rounded-md" title="Aumentar Zoom"> <Icons.ZoomIn /> </button>
-                         <div className="w-px h-6 bg-zinc-800 mx-2" />
-                        <button onClick={() => editorRef.current?.zoomToFit()} className="p-2 hover:bg-zinc-800 rounded-md" title="Ajustar à Tela"> <Icons.FitScreen /> </button>
-                    </div>
-                </div>
-
+                
                 {/* Canvas Area */}
-                 <div className="relative flex-1 flex flex-col bg-zinc-950 min-h-0 pt-4 px-4">
+                 <div className="relative flex-1 flex flex-col bg-zinc-950 min-h-0 p-4">
                      {isLoading && (
                         <div className="absolute inset-0 bg-zinc-950/80 backdrop-blur-sm z-40 flex items-center justify-center p-8">
                             <div className="text-center">
@@ -1807,7 +1876,6 @@ export default function App() {
                             </div>
                         )}
                     </div>
-                    <div className="h-20 flex-shrink-0" />
                     
                     {mode === 'edit' && activeEditFunction === 'compose' && generatedImage && (
                          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-zinc-900/80 backdrop-blur-sm p-2 rounded-lg shadow-lg flex items-center gap-4 ring-1 ring-white/10">
@@ -1841,6 +1909,24 @@ export default function App() {
                             ))}
                         </div>
                     )}
+                </div>
+
+                {/* Bottom Toolbar */}
+                <div className="flex-shrink-0 h-12 bg-zinc-900 flex items-center justify-between px-4 border-t border-zinc-800">
+                    <div className="flex items-center gap-1">
+                        <button onClick={handleUndo} disabled={isUndoDisabled} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Desfazer (Ctrl+Z)"> <Icons.Undo /> </button>
+                        <button onClick={handleRedo} disabled={isRedoDisabled} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Refazer (Ctrl+Y)"> <Icons.Redo /> </button>
+                        <div className="w-px h-6 bg-zinc-800 mx-2" />
+                         <button onClick={handleClearAll} className="p-2 hover:bg-zinc-800 rounded-md" title="Limpar Tudo"> <Icons.ClearAll /> </button>
+                        <button onClick={handleSaveImage} disabled={!generatedImage} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Salvar Imagem"> <Icons.Save /> </button>
+                    </div>
+                    <div className="flex items-center text-sm">
+                        <button onClick={() => editorRef.current?.zoomOut()} className="p-2 hover:bg-zinc-800 rounded-md" title="Diminuir Zoom"> <Icons.ZoomOut /> </button>
+                        <div className="w-14 text-center cursor-pointer" onClick={() => editorRef.current?.zoomToFit()} title="Ajustar à Tela"> {Math.round(editorZoom)}% </div>
+                        <button onClick={() => editorRef.current?.zoomIn()} className="p-2 hover:bg-zinc-800 rounded-md" title="Aumentar Zoom"> <Icons.ZoomIn /> </button>
+                        <div className="w-px h-6 bg-zinc-700 mx-2" />
+                        <button onClick={() => editorRef.current?.zoomToFit()} className="p-2 hover:bg-zinc-800 rounded-md" title="Ajustar à Tela"> <Icons.FitScreen /> </button>
+                    </div>
                 </div>
             </div>
         </div>
