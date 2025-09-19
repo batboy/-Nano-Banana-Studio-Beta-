@@ -65,7 +65,7 @@ export const generateImage = async (
             promptParts.push("with a thick white border, on a simple background");
             break;
         case 'text':
-            promptParts.push(`A clean, vector-style logo featuring the text "${prompt}"`);
+            promptParts.push(`A clean, vector-style logo of ${prompt}`);
             if (styleModifier !== 'default') promptParts.push(`${styleModifier} design`);
             break;
         case 'comic':
@@ -251,7 +251,6 @@ export const processImagesWithPrompt = async (
         // --- PROMPT LOGIC ---
         const userRequest: string = prompt || "Realize a edição conforme instruído pelas imagens e máscaras.";
         const mainMaskProvided = !!mask;
-        const referenceObjectProvided = referenceImages.length > 0 && !!referenceImages[0].mask;
 
         // Throw an error if there is absolutely no input for the model to work with
         if (!prompt && !mainMaskProvided && referenceImages.length === 0) {
@@ -260,50 +259,19 @@ export const processImagesWithPrompt = async (
         
         let contextInstructions: string;
 
-        if (mainMaskProvided && referenceObjectProvided) {
-            // Case 1: Object Insertion. User has masked an area on the main image AND provided a masked reference object.
+        if (mainMaskProvided) {
+            // The model is trained to understand that a mask following an image indicates the area to edit.
+            // A simpler, more direct prompt combined with client-side compositing is more reliable.
+            // The client will handle preserving the unmasked areas of the image.
             contextInstructions = `
-**OPERATION: Precision Object Compositing**
-**PRIMARY GOAL:** Insert an object from a reference image into a masked area of the base image without altering ANY other part of the base image.
+**INSTRUÇÃO:** Você é um editor de fotos especialista. Edite a imagem principal na área indicada pela máscara.
+**PEDIDO DO USUÁRIO:** "${userRequest}"
 
-**DIRETIVA CRÍTICA: PRESERVAÇÃO DO FUNDO**
-- A imagem de saída final DEVE ser idêntica pixel por pixel à primeira imagem de entrada (BASE_IMAGE) em todas as áreas onde a segunda imagem de entrada (MAIN_MASK) for PRETA.
-- Esta é uma regra não negociável. Qualquer alteração, mudança de cor ou re-renderização do fundo (a área com máscara preta) constitui uma falha completa.
-
-**ENTRADAS (em ordem):**
-1.  **BASE_IMAGE:** A cena principal. Este é o fundo que deve ser preservado.
-2.  **MAIN_MASK:** Uma máscara preta e branca. A área BRANCA é a *única* região onde as alterações são permitidas. A área PRETA deve permanecer intocada.
-3.  **REFERENCE_IMAGE:** Contém o objeto a ser inserido.
-4.  **REFERENCE_MASK:** Isola o objeto dentro da REFERENCE_IMAGE.
-
-**EXECUÇÃO PASSO A PASSO:**
-1.  **Extrair:** Isole o objeto da REFERENCE_IMAGE usando a REFERENCE_MASK.
-2.  **Posicionar:** Posicione o objeto extraído na área BRANCA definida pela MAIN_MASK sobre a BASE_IMAGE.
-3.  **Integrar:** Mescle perfeitamente o objeto inserido com a BASE_IMAGE. Este processo de mesclagem (ajuste de iluminação, sombras, cor, bordas) deve afetar APENAS os pixels *dentro* da área BRANCA da MAIN_MASK.
-4.  **Verificar:** Garanta que o fundo (tudo na área PRETA da MAIN_MASK) não foi alterado em relação à BASE_IMAGE original.
-
-**ORIENTAÇÃO DO USUÁRIO (aplica-se APENAS ao objeto inserido):**
-- "${userRequest}"
-`;
-        } else if (mainMaskProvided) {
-            // Case 2: Inpainting. User has masked an area on the main image and provided a text prompt.
-            contextInstructions = `
-**OPERATION: Masked Image Edit (Inpainting)**
-**PRIMARY GOAL:** Edit a specific region of an image based on a text prompt, leaving the rest untouched.
-
-**CRITICAL RULE:** The final output image MUST be identical to the first input image (BASE_IMAGE) in every area that is BLACK in the second input image (THE_MASK). Any change outside the WHITE area of THE_MASK is a failure.
-
-**INPUTS (in order):**
-1.  **BASE_IMAGE:** The image to be edited.
-2.  **THE_MASK:** The area to edit is marked in WHITE.
-
-**INSTRUCTIONS:**
-1.  Modify ONLY the area of the BASE_IMAGE that corresponds to the WHITE region in THE_MASK.
-2.  Implement the user's instruction for the edit: "${userRequest}".
-3.  If other reference images are provided (without masks), use them for stylistic inspiration for the inpainted area.
+Se imagens de referência forem fornecidas, use-as como inspiração de conteúdo ou estilo para a área editada.
+Gere a imagem inteira com a modificação solicitada aplicada de forma natural e coesa.
 `;
         } else {
-            // Case 3: General Edit. No mask on the main image. Edits apply globally.
+            // Case: General Edit. No mask on the main image. Edits apply globally.
             contextInstructions = `
 **OPERATION: General Image Edit**
 **PRIMARY GOAL:** Edit the entire image based on a user prompt and any reference images provided.

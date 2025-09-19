@@ -1439,7 +1439,7 @@ export default function App() {
                 promptParts.push("with a thick white border, on a simple background");
                 break;
             case 'text':
-                promptParts.push(`A clean, vector-style logo featuring the text "${prompt}"`);
+                promptParts.push(`A clean, vector-style logo of ${prompt}`);
                 if (styleModifier !== 'default') promptParts.push(`${styleModifier} design`);
                 break;
             case 'comic':
