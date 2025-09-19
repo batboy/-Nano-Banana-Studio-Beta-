@@ -2,7 +2,7 @@ import React from 'react';
 
 // Base component for all icons
 const MaterialIcon: React.FC<{ iconName: string; className?: string } & React.HTMLAttributes<HTMLSpanElement>> = ({ iconName, className, ...props }) => (
-  <span className={`material-symbols-outlined ${className || ''}`.trim()} {...props}>
+  <span className={`material-symbols-outlined text-lg ${className || ''}`.trim()} {...props}>
     {iconName}
   </span>
 );

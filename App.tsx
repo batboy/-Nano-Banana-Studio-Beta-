@@ -1594,7 +1594,7 @@ export default function App() {
                                     <FunctionButton data-function="comic" isActive={activeCreateFunction === 'comic'} onClick={handleCreateFunctionClick} icon={<Icons.Comic />} name="Quadrinho" />
                                 </div>
                             </PanelSection>
-                            <PanelSection title="Proporção" icon={<Icons.AspectRatio className="text-base" />}>
+                            <PanelSection title="Proporção" icon={<Icons.AspectRatio />}>
                                 <div className="flex gap-2">
                                     {['1:1', '16:9', '9:16', '4:3', '3:4'].map(ratio => (
                                         <button key={ratio} onClick={() => handleAspectRatioChange(ratio)} className={`flex-1 text-center py-2 border rounded-md transition-colors text-sm ${aspectRatio === ratio ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800/50'}`}>
@@ -1603,7 +1603,7 @@ export default function App() {
                                     ))}
                                 </div>
                             </PanelSection>
-                            <PanelSection title="Configurações Avançadas" icon={<Icons.Settings className="text-base" />}>
+                            <PanelSection title="Configurações Avançadas" icon={<Icons.Settings />}>
                                 <div className="space-y-4">
                                     {styleOptions[activeCreateFunction].length > 0 && (
                                         <div className="flex flex-col gap-2">
@@ -1691,7 +1691,7 @@ export default function App() {
                                         <div className={`border-2 rounded-md transition-all duration-200 ${dragTarget === 'reference' ? 'border-blue-500 bg-blue-500/10 border-solid scale-105' : 'border-zinc-800 border-dashed'}`}>
                                             <input type="file" id="reference-upload" className="hidden" multiple accept="image/png, image/jpeg, image/webp" onChange={(e) => handleImageUpload(e.target.files, 'reference')} disabled={mode !== 'edit'} />
                                             <label htmlFor="reference-upload" className={`${mode !== 'edit' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} flex items-center justify-center gap-2 text-center p-2`}>
-                                                <Icons.UploadCloud className="text-2xl text-zinc-500" />
+                                                <Icons.UploadCloud className="text-xl text-zinc-500" />
                                                 <span className="text-xs">Arraste ou clique para enviar</span>
                                             </label>
                                         </div>
@@ -1713,7 +1713,7 @@ export default function App() {
                                                             className="p-2 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700 transition-colors"
                                                             title="Remover"
                                                         >
-                                                            <Icons.Close className="text-lg" />
+                                                            <Icons.Close />
                                                         </button>
                                                     </div>
                                                 </div>
@@ -1728,7 +1728,7 @@ export default function App() {
 
                 {/* History Area */}
                 <div className="flex-shrink-0 border-t border-zinc-800 bg-zinc-900/50">
-                    <PanelSection title="Histórico" icon={<Icons.History className="text-xl" />} defaultOpen={false}>
+                    <PanelSection title="Histórico" icon={<Icons.History />} defaultOpen={false}>
                         <div className="max-h-56 overflow-y-auto space-y-2">
                             {history.length === 0 ? (
                                 <p className="text-xs text-zinc-500 text-center py-4">Nenhuma ação registrada.</p>
@@ -1753,7 +1753,7 @@ export default function App() {
                 { (mode === 'create' || (mode === 'edit' && activeEditFunction === 'transform')) && (
                     <div className="border-b border-zinc-800 p-3 space-y-3">
                         <h3 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
-                            <Icons.Block className="text-base" />
+                            <Icons.Block />
                             <span>Prompt Negativo (Opcional)</span>
                         </h3>
                          <textarea
