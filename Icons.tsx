@@ -9,6 +9,7 @@ const MaterialIcon: React.FC<{ iconName: string; className?: string } & React.HT
 
 export const Create = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="auto_awesome" {...props} />;
 export const Edit = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="tune" {...props} />;
+export const Video = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="movie" {...props} />;
 export const Save = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="download" {...props} />;
 export const Undo = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="undo" {...props} />;
 export const Redo = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="redo" {...props} />;
@@ -42,6 +43,8 @@ export const Close = (props: React.HTMLAttributes<HTMLSpanElement>) => <Material
 export const Send = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="send" {...props} />;
 export const ChevronDown = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="expand_more" {...props} />;
 export const Transform = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="auto_fix_high" {...props} />;
+export const Visibility = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="visibility" {...props} />;
+export const Start = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="start" {...props} />;
 
 
 export const Spinner = ({ className, ...props }: React.HTMLAttributes<SVGSVGElement>) => (

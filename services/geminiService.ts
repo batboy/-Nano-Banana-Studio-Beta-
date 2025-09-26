@@ -1,5 +1,5 @@
-import { GoogleGenAI, Modality, GenerateContentResponse } from "@google/genai";
-import { UploadedImage, EditFunction, ReferenceImage } from '../types';
+import { GoogleGenAI, Modality, GenerateContentResponse, Type } from "@google/genai";
+import { UploadedImage, EditFunction, ReferenceImage, DetectedObject } from '../types';
 
 if (!process.env.API_KEY) {
     throw new Error("API_KEY environment variable is not set.");
@@ -32,6 +32,86 @@ export const analyzeImageStyle = async (image: UploadedImage): Promise<string> =
     }
 };
 
+export const detectObjects = async (image: UploadedImage): Promise<DetectedObject[]> => {
+    const model = 'gemini-2.5-flash';
+    const prompt = "Detect all distinct objects in the image. For each object, provide its name and a tight bounding box. Ensure bounding box coordinates are normalized between 0 and 1, where (0,0) is the top-left corner and (1,1) is the bottom-right.";
+
+    const imagePart = {
+        inlineData: {
+            data: image.base64,
+            mimeType: image.mimeType,
+        },
+    };
+
+    const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+            objects: {
+                type: Type.ARRAY,
+                items: {
+                    type: Type.OBJECT,
+                    properties: {
+                        name: { type: Type.STRING, description: 'The name of the detected object.' },
+                        box: {
+                            type: Type.OBJECT,
+                            properties: {
+                                x1: { type: Type.NUMBER, description: 'Normalized top-left x-coordinate (0-1).' },
+                                y1: { type: Type.NUMBER, description: 'Normalized top-left y-coordinate (0-1).' },
+                                x2: { type: Type.NUMBER, description: 'Normalized bottom-right x-coordinate (0-1).' },
+                                y2: { type: Type.NUMBER, description: 'Normalized bottom-right y-coordinate (0-1).' },
+                            },
+                            required: ['x1', 'y1', 'x2', 'y2'],
+                        },
+                    },
+                    required: ['name', 'box'],
+                },
+            },
+        },
+        required: ['objects'],
+    };
+
+    try {
+        const response = await ai.models.generateContent({
+            model,
+            contents: { parts: [imagePart, { text: prompt }] },
+            config: {
+                responseMimeType: 'application/json',
+                responseSchema,
+            },
+        });
+
+        const jsonStr = response.text.trim();
+        const result = JSON.parse(jsonStr);
+        const objects: DetectedObject[] = result.objects || [];
+        
+        // Post-process to handle duplicate names by appending a unique ID
+        const nameCounts = new Map<string, number>();
+        objects.forEach(obj => {
+            nameCounts.set(obj.name, (nameCounts.get(obj.name) || 0) + 1);
+        });
+
+        const nameIndices = new Map<string, number>();
+        const processedObjects = objects.map(obj => {
+            const count = nameCounts.get(obj.name);
+            if (count && count > 1) {
+                const currentIndex = (nameIndices.get(obj.name) || 0) + 1;
+                nameIndices.set(obj.name, currentIndex);
+                return {
+                    ...obj,
+                    name: `${obj.name} #${currentIndex}`
+                };
+            }
+            return obj;
+        });
+
+        return processedObjects;
+
+    } catch (e: any) {
+        console.error("Gemini API Error (detectObjects):", e);
+        throw new Error("Não foi possível detectar objetos na imagem. A API pode estar indisponível ou a imagem pode não ser suportada.");
+    }
+};
+
 export const fileToBase64 = (file: File): Promise<UploadedImage> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -44,6 +124,53 @@ export const fileToBase64 = (file: File): Promise<UploadedImage> => {
     reader.onerror = error => reject(error);
   });
 };
+
+export const generateVideo = async (
+    prompt: string,
+    startFrame?: UploadedImage,
+    aspectRatio?: string
+): Promise<string> => {
+    try {
+        const imagePayload = startFrame ? {
+            imageBytes: startFrame.base64,
+            mimeType: startFrame.mimeType,
+        } : undefined;
+
+        let operation = await ai.models.generateVideos({
+            model: 'veo-2.0-generate-001',
+            prompt: prompt,
+            ...(imagePayload && { image: imagePayload }),
+            config: {
+                numberOfVideos: 1,
+                ...(aspectRatio && { aspectRatio }),
+            }
+        });
+
+        while (!operation.done) {
+            // Poll every 10 seconds
+            await new Promise(resolve => setTimeout(resolve, 10000));
+            operation = await ai.operations.getVideosOperation({ operation: operation });
+        }
+
+        const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+        if (!downloadLink) {
+            throw new Error("A geração do vídeo falhou ou não retornou um link para download.");
+        }
+
+        const videoResponse = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
+        if (!videoResponse.ok) {
+            throw new Error(`Falha ao baixar o vídeo gerado. Status: ${videoResponse.status}`);
+        }
+        
+        const videoBlob = await videoResponse.blob();
+        return URL.createObjectURL(videoBlob);
+
+    } catch (e: any) {
+        console.error("Gemini API Error (generateVideo):", e);
+        throw new Error("Ocorreu um erro na geração do vídeo. Verifique seu prompt e tente novamente.");
+    }
+};
+
 
 export const generateImage = async (
     prompt: string, 
@@ -160,10 +287,10 @@ export const processImagesWithPrompt = async (
     styleStrength: number,
     negativePrompt: string
 ): Promise<string> => {
-    const parts = [];
+    const parts: any[] = [];
     
     const dimensionInstruction = originalSize
-        ? `**CRITICAL RULE**: The output image MUST have the exact same dimensions as the original image: ${originalSize.width}px by ${originalSize.height}px. Do NOT crop, resize, or change the aspect ratio. The entire scene from the original image must be present in the final output, just with the edits applied.`
+        ? `**REGRA CRÍTICA E OBRIGATÓRIA**: A imagem de saída DEVE ter exatamente as mesmas dimensões da imagem original: ${originalSize.width}px por ${originalSize.height}px. NÃO corte, redimensione, estique, ou altere a proporção. A cena inteira da imagem original deve estar presente no resultado final, apenas com as edições aplicadas.`
         : '';
 
     if (editFunction === 'style') {
@@ -197,95 +324,71 @@ export const processImagesWithPrompt = async (
             text: `\n**Instruções Finais:**\n1. Renderize a IMAGEM DE CONTEÚDO inteiramente no estilo da IMAGEM DE ESTILO.\n2. Preserve o assunto e a composição da IMAGEM DE CONTEÚDO original.\n3. **Intensidade do Estilo:** Aplique o estilo com uma intensidade de **${styleStrength}%**. Um valor mais alto significa uma correspondência mais próxima com a IMAGEM DE ESTILO.\n4. **Contexto do Usuário:** Considere esta orientação adicional: "${userRequest}".\n\nGere a imagem final agora.`
         });
 
-    } else if (editFunction === 'transform') {
-        if (!prompt) {
-            throw new Error("Por favor, descreva como você quer transformar a imagem.");
-        }
-        
-        parts.push({
-            text: `**Tarefa: Transformação de Imagem Global**\n${dimensionInstruction}\n\nVocê receberá uma imagem e uma instrução em texto. Sua tarefa é re-renderizar a imagem INTEIRA de acordo com a instrução, preservando o assunto principal, mas aplicando a transformação solicitada de forma criativa e coerente.`
-        });
-        
-        // 1. Content Image
-        parts.push({
-            inlineData: { data: mainImage.base64, mimeType: mainImage.mimeType }
-        });
-        
-        let transformInstructions = `\n**Instrução de Transformação:**\n"${prompt}"`;
+    } else { // 'compose' logic - REWRITTEN FOR CLARITY
+        const hasMask = !!mask;
 
-        if (negativePrompt) {
-            transformInstructions += `\n\n**Restrições (o que evitar):**\n"${negativePrompt}"`;
-        }
+        if (hasMask) {
+            // MASKED EDIT (Inpainting/Outpainting)
+            if (!prompt && referenceImages.length === 0) {
+                throw new Error("Por favor, descreva a edição ou adicione uma imagem de referência para guiar a modificação na área selecionada.");
+            }
 
-        transformInstructions += `\n\nGere a imagem final transformada agora.`;
+            parts.push({ text: "**IMAGEM PRINCIPAL (Conteúdo)**\nEsta é a imagem a ser editada. Suas dimensões e conteúdo fora da máscara DEVEM ser preservados." });
+            parts.push({ inlineData: { data: mainImage.base64, mimeType: mainImage.mimeType } });
 
-        parts.push({
-            text: transformInstructions
-        });
-        
-    } else { // 'compose' logic
-        // 1. Add the main image
-        parts.push({
-            inlineData: { data: mainImage.base64, mimeType: mainImage.mimeType }
-        });
+            if (mask) {
+                parts.push({ text: "**MÁSCARA DE EDIÇÃO**\nA área preenchida na imagem a seguir é a única que deve ser modificada." });
+                parts.push({ inlineData: { data: mask.base64, mimeType: mask.mimeType } });
+            }
 
-        // 2. Add the main image mask immediately after the main image
-        if (mask) {
-            parts.push({
-                inlineData: { data: mask.base64, mimeType: mask.mimeType }
-            });
-        }
-
-        // 3. Add any reference images and their corresponding masks
-        referenceImages.forEach(ref => {
-            parts.push({
-                inlineData: { data: ref.image.base64, mimeType: ref.image.mimeType }
-            });
-            if (ref.mask) {
-                parts.push({
-                    inlineData: { data: ref.mask.base64, mimeType: ref.mask.mimeType }
+            if (referenceImages.length > 0) {
+                parts.push({ text: "**IMAGENS DE REFERÊNCIA**\nUse a(s) imagem(ns) a seguir como inspiração de conteúdo ou estilo para a área a ser editada." });
+                referenceImages.forEach(ref => {
+                    parts.push({ inlineData: { data: ref.image.base64, mimeType: ref.image.mimeType } });
                 });
             }
-        });
-        
-        // --- PROMPT LOGIC ---
-        const userRequest: string = prompt || "Realize a edição conforme instruído pelas imagens e máscaras.";
-        const mainMaskProvided = !!mask;
-
-        // Throw an error if there is absolutely no input for the model to work with
-        if (!prompt && !mainMaskProvided && referenceImages.length === 0) {
-            throw new Error("Por favor, descreva a edição, selecione uma área na imagem principal ou adicione uma imagem de referência para começar a editar.");
-        }
-        
-        let contextInstructions: string;
-
-        if (mainMaskProvided) {
-            // The model is trained to understand that a mask following an image indicates the area to edit.
-            // A simpler, more direct prompt combined with client-side compositing is more reliable.
-            // The client will handle preserving the unmasked areas of the image.
-            contextInstructions = `
-**INSTRUÇÃO:** Você é um editor de fotos especialista. Edite a imagem principal na área indicada pela máscara.
+            
+            const userRequest: string = prompt || "Realize a edição conforme instruído pelas imagens e máscaras.";
+            
+            const finalInstructions = `
+**INSTRUÇÕES FINAIS:**
+${dimensionInstruction}
 **PEDIDO DO USUÁRIO:** "${userRequest}"
 
-Se imagens de referência forem fornecidas, use-as como inspiração de conteúdo ou estilo para a área editada.
-Gere a imagem inteira com a modificação solicitada aplicada de forma natural e coesa.
-`;
-        } else {
-            // Case: General Edit. No mask on the main image. Edits apply globally.
-            contextInstructions = `
-**OPERATION: General Image Edit**
-**PRIMARY GOAL:** Edit the entire image based on a user prompt and any reference images provided.
-**INSTRUCTIONS:**
-Follow the user's instructions to edit the image: "${userRequest}". Use the provided reference images for context, content, or style as applicable.
-`;
-        }
-        
-        const finalPrompt = `
-${dimensionInstruction}
-
-${contextInstructions}
+Preencha a área mascarada da IMAGEM PRINCIPAL de acordo com o pedido do usuário, usando as imagens de referência como inspiração, se fornecidas. A imagem final DEVE manter o conteúdo original fora da máscara e se integrar perfeitamente.
 `.trim().replace(/\n{2,}/g, '\n');
-        parts.push({ text: finalPrompt });
+            
+            parts.push({ text: finalInstructions });
+
+        } else {
+            // GLOBAL EDIT (Transformation)
+            if (!prompt) {
+                throw new Error("Por favor, descreva como você quer transformar a imagem.");
+            }
+            
+            parts.push({ text: "**IMAGEM PRINCIPAL (Conteúdo)**\nEsta é a imagem a ser transformada. Sua composição geral e dimensões DEVEM ser preservadas." });
+            parts.push({ inlineData: { data: mainImage.base64, mimeType: mainImage.mimeType } });
+
+            if (referenceImages.length > 0) {
+                 parts.push({ text: "**IMAGENS DE REFERÊNCIA**\nUse a(s) imagem(ns) a seguir como inspiração para a transformação global." });
+                 referenceImages.forEach(ref => {
+                    parts.push({ inlineData: { data: ref.image.base64, mimeType: ref.image.mimeType } });
+                });
+            }
+            
+            let finalInstructions = `
+**INSTRUÇÕES FINAIS:**
+${dimensionInstruction}
+**PEDIDO DE TRANSFORMAÇÃO:** "${prompt}"`;
+
+            if (negativePrompt) {
+                finalInstructions += `\n**RESTRIÇÕES (o que evitar):** "${negativePrompt}"`;
+            }
+
+            finalInstructions += `\n\nRe-renderize a IMAGEM PRINCIPAL inteira de acordo com o pedido de transformação, usando as imagens de referência como inspiração, se fornecidas.`;
+            
+            parts.push({ text: finalInstructions.trim().replace(/\n{2,}/g, '\n') });
+        }
     }
 
     let response: GenerateContentResponse;

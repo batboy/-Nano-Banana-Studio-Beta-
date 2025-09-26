@@ -1,6 +1,6 @@
 import React, { useState, useCallback, ChangeEvent, useEffect, useRef, useImperativeHandle, forwardRef, useMemo } from 'react';
-import type { Mode, CreateFunction, EditFunction, UploadedImage, HistoryEntry, UploadProgress, ReferenceImage } from './types';
-import { generateImage, processImagesWithPrompt, analyzeImageStyle } from './services/geminiService';
+import type { Mode, CreateFunction, EditFunction, UploadedImage, HistoryEntry, UploadProgress, ReferenceImage, DetectedObject, VideoFunction } from './types';
+import { generateImage, processImagesWithPrompt, analyzeImageStyle, detectObjects, generateVideo } from './services/geminiService';
 import * as Icons from './Icons';
 
 // Reusable Slider Component
@@ -90,6 +90,8 @@ interface ImageEditorProps {
   brushSize: number;
   maskOpacity: number;
   onZoomChange: (zoom: number) => void;
+  detectedObjects: DetectedObject[];
+  highlightedObject: DetectedObject | null;
 }
 
 interface ImageEditorRef {
@@ -98,6 +100,7 @@ interface ImageEditorRef {
   hasMaskData: () => boolean;
   getOriginalImageSize: () => { width: number, height: number } | null;
   clearMask: () => void;
+  clearOverlays: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
   setZoom: (zoom: number) => void;
@@ -105,9 +108,10 @@ interface ImageEditorRef {
   stampObjectOnMask: (data: { previewUrl: string, transform: any, maskOpacity: number }) => void;
 }
 
-const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelectionEnabled, maskTool, brushSize, maskOpacity, onZoomChange }, ref) => {
+const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelectionEnabled, maskTool, brushSize, maskOpacity, onZoomChange, detectedObjects, highlightedObject }, ref) => {
     const imageCanvasRef = useRef<HTMLCanvasElement>(null);
     const maskCanvasRef = useRef<HTMLCanvasElement>(null);
+    const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const originalImageSizeRef = useRef<{ width: number, height: number }>({ width: 0, height: 0 });
     const miniMapCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -124,6 +128,14 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
     const isSpacebarDownRef = useRef(false);
     
     const currentStrokePointsRef = useRef<{ x: number, y: number }[]>([]);
+
+    const clearOverlays = useCallback(() => {
+        const canvas = overlayCanvasRef.current;
+        if (canvas) {
+            const ctx = canvas.getContext('2d');
+            ctx?.clearRect(0, 0, canvas.width, canvas.height);
+        }
+    }, []);
 
     const clearMask = useCallback(() => {
         const canvas = maskCanvasRef.current;
@@ -224,19 +236,64 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
             
             const imageCanvas = imageCanvasRef.current;
             const maskCanvas = maskCanvasRef.current;
-            if (!imageCanvas || !maskCanvas) return;
+            const overlayCanvas = overlayCanvasRef.current;
+            if (!imageCanvas || !maskCanvas || !overlayCanvas) return;
 
             imageCanvas.width = image.width;
             imageCanvas.height = image.height;
             maskCanvas.width = image.width;
             maskCanvas.height = image.height;
+            overlayCanvas.width = image.width;
+            overlayCanvas.height = image.height;
 
             const ctx = imageCanvas.getContext('2d');
             ctx?.drawImage(image, 0, 0);
             clearMask();
+            clearOverlays();
             zoomToFit();
         };
-    }, [src, zoomToFit, clearMask]);
+    }, [src, zoomToFit, clearMask, clearOverlays]);
+
+    useEffect(() => {
+        const overlayCanvas = overlayCanvasRef.current;
+        const ctx = overlayCanvas?.getContext('2d');
+        const { width: imgWidth, height: imgHeight } = originalImageSizeRef.current;
+
+        if (!ctx || !overlayCanvas || imgWidth === 0 || !detectedObjects) return;
+
+        ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+        detectedObjects.forEach(obj => {
+            const isHighlighted = highlightedObject &&
+                highlightedObject.name === obj.name &&
+                JSON.stringify(highlightedObject.box) === JSON.stringify(obj.box);
+
+            const x = obj.box.x1 * imgWidth;
+            const y = obj.box.y1 * imgHeight;
+            const w = (obj.box.x2 - obj.box.x1) * imgWidth;
+            const h = (obj.box.y2 - obj.box.y1) * imgHeight;
+
+            // Box
+            ctx.strokeStyle = isHighlighted ? '#facc15' : '#3b82f6';
+            ctx.lineWidth = isHighlighted ? 4 : 2;
+            ctx.strokeRect(x, y, w, h);
+
+            // Label
+            const label = obj.name;
+            ctx.font = 'bold 16px Inter, sans-serif';
+            const textMetrics = ctx.measureText(label);
+            const textWidth = textMetrics.width;
+            const textHeight = 16;
+            const padding = 4;
+
+            ctx.fillStyle = isHighlighted ? '#facc15' : '#3b82f6';
+            ctx.fillRect(x, y - (textHeight + padding), textWidth + padding * 2, textHeight + padding);
+            
+            ctx.fillStyle = '#18181b';
+            ctx.fillText(label, x + padding, y - (padding / 2));
+        });
+
+    }, [detectedObjects, highlightedObject]);
 
     const floodFill = useCallback((canvas: HTMLCanvasElement, startX: number, startY: number, opacity: number) => {
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -476,6 +533,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
                 return originalImageSizeRef.current.width > 0 ? originalImageSizeRef.current : null;
             },
             clearMask,
+            clearOverlays,
             zoomIn: () => handleZoomSliderChange(transform.scale * 100 * 1.2),
             zoomOut: () => handleZoomSliderChange(transform.scale * 100 / 1.2),
             setZoom: (zoom) => handleZoomSliderChange(zoom),
@@ -698,6 +756,10 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
                     className="absolute top-0 left-0 transition-opacity duration-200"
                     style={{ opacity: isSelectionEnabled ? maskOpacity : 0 }}
                 />
+                <canvas
+                    ref={overlayCanvasRef}
+                    className="absolute top-0 left-0 pointer-events-none"
+                />
             </div>
             {isSelectionEnabled && cursorPreview.visible && (
                  <div
@@ -843,6 +905,92 @@ const compositeImageWithMask = (
     });
 };
 
+const ImageUploadSlot: React.FC<{
+    id: string;
+    label: string;
+    icon: React.ReactNode;
+    imagePreviewUrl: string | null;
+    onUpload: (file: File) => void;
+    onRemove: () => void;
+}> = ({ id, label, icon, imagePreviewUrl, onUpload, onRemove }) => {
+    const [isDragging, setIsDragging] = useState(false);
+    const dragCounter = useRef(0);
+
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files[0]) {
+            onUpload(e.target.files[0]);
+            e.target.value = ''; // Reset input to allow re-uploading the same file
+        }
+    };
+
+    const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounter.current++;
+        setIsDragging(true);
+    };
+
+    const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounter.current--;
+        if (dragCounter.current === 0) {
+            setIsDragging(false);
+        }
+    };
+
+    const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(false);
+        dragCounter.current = 0;
+        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+            onUpload(e.dataTransfer.files[0]);
+        }
+    };
+
+    if (imagePreviewUrl) {
+        return (
+            <div className="relative group w-full h-full bg-zinc-800 rounded-md overflow-hidden">
+                <img src={imagePreviewUrl} alt={label} className="w-full h-full object-contain" />
+                <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                    <button onClick={onRemove} className="p-2 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700 transition-colors" title="Remover Imagem">
+                        <Icons.Close />
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={handleDrop}
+            className={`w-full h-full border-2 rounded-md transition-all duration-200 ${isDragging ? 'border-blue-500 bg-blue-500/10 border-solid' : 'border-zinc-800 border-dashed'}`}
+        >
+            <input type="file" id={id} className="hidden" accept="image/png, image/jpeg, image/webp" onChange={handleFileChange} />
+            <label htmlFor={id} className="cursor-pointer flex flex-col items-center justify-center h-full text-center p-2 text-zinc-500 hover:text-zinc-400">
+                {icon}
+                <span className="text-xs font-semibold mt-1">{label}</span>
+                <span className="text-xs mt-1">Arraste ou clique para enviar</span>
+            </label>
+        </div>
+    );
+};
+
+const mapImageAspectRatioToVideo = (width: number, height: number): '16:9' | '9:16' => {
+    const ratio = width / height;
+    // Mapeie para a proporção de vídeo suportada mais próxima.
+    // O modelo VEO não suporta 1:1, então mapeamos imagens quadradas para 16:9.
+    if (ratio >= 1) { // Paisagem ou quadrado
+        return '16:9';
+    } else { // Retrato
+        return '9:16';
+    }
+};
+
 export default function App() {
     // Main state
     const [prompt, setPrompt] = useState<string>('');
@@ -864,10 +1012,22 @@ export default function App() {
     const [activeEditFunction, setActiveEditFunction] = useState<EditFunction>('compose');
     const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
     const [styleStrength, setStyleStrength] = useState<number>(100);
+    const [detectedObjects, setDetectedObjects] = useState<DetectedObject[]>([]);
+    const [highlightedObject, setHighlightedObject] = useState<DetectedObject | null>(null);
+    
+    // Video mode state
+    const [activeVideoFunction, setActiveVideoFunction] = useState<VideoFunction>('prompt');
+    const [startFrame, setStartFrame] = useState<UploadedImage | null>(null);
+    const [startFramePreview, setStartFramePreview] = useState<string | null>(null);
+    const [videoAspectRatioInfo, setVideoAspectRatioInfo] = useState<{width: number; height: number; ratio: string; mappedRatio: '16:9' | '9:16' } | null>(null);
+    const [videoFitMode, setVideoFitMode] = useState<'crop' | 'fill'>('crop');
+
 
     // UI & Loading state
     const [isLoading, setIsLoading] = useState<boolean>(false);
+    const [loadingMessage, setLoadingMessage] = useState<string>('Gerando sua mídia...');
     const [isAnalyzingStyle, setIsAnalyzingStyle] = useState<boolean>(false);
+    const [isDetectingObjects, setIsDetectingObjects] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [showMobileModal, setShowMobileModal] = useState<boolean>(false);
     const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -890,7 +1050,9 @@ export default function App() {
     const dragLeaveTimeout = useRef<number | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-    const generatedImage = history[historyIndex]?.imageUrl ?? null;
+    const currentEntry = history[historyIndex] ?? null;
+    const generatedImage = currentEntry?.imageUrl ?? null;
+    const generatedVideo = currentEntry?.videoUrl ?? null;
 
     const styleOptions: Record<CreateFunction, { value: string, label: string }[]> = {
         free: [],
@@ -940,6 +1102,12 @@ export default function App() {
         closeConfirmationDialog();
     };
 
+    const resetDetectionState = useCallback(() => {
+        setDetectedObjects([]);
+        setHighlightedObject(null);
+        editorRef.current?.clearOverlays();
+    }, []);
+
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (mode !== 'edit' || activeEditFunction !== 'compose') return;
@@ -968,6 +1136,9 @@ export default function App() {
 
     const resetImages = () => {
         setReferenceImages([]);
+        setStartFrame(null);
+        setStartFramePreview(null);
+        resetDetectionState();
     };
 
     const isEditStateDirty = useCallback(() => {
@@ -983,32 +1154,22 @@ export default function App() {
 
     const handleModeToggle = (newMode: Mode) => {
         if (newMode === mode) return;
-
-        const performSwitchToCreate = () => {
-            setMode('create');
+    
+        const latestImage = history[historyIndex]?.imageUrl;
+    
+        const performHardSwitch = () => {
+            setMode(newMode);
             resetImages();
             setHistory([]);
             setHistoryIndex(-1);
             setPrompt('');
             setNegativePrompt('');
         };
-
-        if (newMode === 'create' && mode === 'edit' && history.length > 0) {
-            setConfirmationDialog({
-                isOpen: true,
-                title: 'Sair do Modo de Edição?',
-                message: 'Ao voltar para o modo de criação, a imagem atual e seu histórico de edições serão perdidos. Deseja continuar?',
-                onConfirm: performSwitchToCreate
-            });
-            return;
-        }
-
-        if (newMode === 'create') {
-            performSwitchToCreate();
-        } else {
+    
+        const performSwitchToEdit = () => {
             setMode('edit');
             resetImages();
-            if (generatedImage) {
+            if (latestImage) {
                 const currentEntry = history[historyIndex];
                 setHistory([currentEntry]);
                 setHistoryIndex(0);
@@ -1020,6 +1181,64 @@ export default function App() {
                 setPrompt('');
                 setNegativePrompt('');
             }
+        };
+    
+        const performSwitchToVideoWithAnimation = () => {
+            if (!latestImage) {
+                // If there's no image, fall back to a standard switch to video mode
+                setMode('video');
+                resetImages();
+                setHistory([]);
+                setHistoryIndex(-1);
+                setPrompt('');
+                setNegativePrompt('');
+                setActiveVideoFunction('prompt');
+                return;
+            }
+    
+            // If there IS an image, set up the animation state while preserving history
+            setMode('video');
+            resetImages(); // Clears ref images, but we set start frame next
+            setPrompt('');
+            setNegativePrompt('');
+            setActiveVideoFunction('animation');
+    
+            const base64 = latestImage.split(',')[1];
+            const mimeType = latestImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
+            setStartFrame({ base64, mimeType });
+            setStartFramePreview(latestImage);
+        };
+    
+        if (mode === 'edit' && history.length > 0 && newMode !== 'edit') {
+            const isContinuingToVideo = newMode === 'video';
+            
+            const onConfirmAction = isContinuingToVideo
+                ? performSwitchToVideoWithAnimation
+                : performHardSwitch;
+            
+            const dialogMessage = isContinuingToVideo
+                ? "Isso irá transferir sua imagem atual para o modo de vídeo para animação, preservando seu histórico. Deseja continuar?"
+                : "Ao sair do modo de edição, a imagem atual e seu histórico de edições serão perdidos. Deseja continuar?";
+            
+            const dialogTitle = isContinuingToVideo
+                ? 'Mudar para o Modo de Vídeo?'
+                : 'Sair do Modo de Edição?';
+
+            setConfirmationDialog({
+                isOpen: true,
+                title: dialogTitle,
+                message: dialogMessage,
+                onConfirm: onConfirmAction,
+            });
+            return;
+        }
+    
+        if (newMode === 'edit') {
+            performSwitchToEdit();
+        } else if (newMode === 'video') {
+            performSwitchToVideoWithAnimation();
+        } else {
+            performHardSwitch();
         }
     };
     
@@ -1029,6 +1248,7 @@ export default function App() {
         const entry = history[index];
         if (!entry) return;
 
+        resetDetectionState();
         setHistoryIndex(index);
         setPrompt(entry.prompt);
         setNegativePrompt(entry.negativePrompt || '');
@@ -1039,14 +1259,18 @@ export default function App() {
             setAspectRatio(entry.aspectRatio!);
             setComicColorPalette(entry.comicColorPalette || 'vibrant');
             resetImages(); 
-        } else { 
+        } else if (entry.mode === 'edit') { 
             setActiveEditFunction(entry.editFunction!);
             setReferenceImages(entry.referenceImages || []);
             if (entry.editFunction === 'style' && entry.styleStrength) {
                 setStyleStrength(entry.styleStrength);
             }
+        } else if (entry.mode === 'video') {
+            setActiveVideoFunction(entry.videoFunction || 'prompt');
+            setStartFrame(entry.startFrame || null);
+            setStartFramePreview(entry.startFramePreviewUrl || null);
         }
-    }, [history]);
+    }, [history, resetDetectionState]);
 
     const handleCreateFunctionClick = (func: CreateFunction) => {
         setActiveCreateFunction(func);
@@ -1064,6 +1288,51 @@ export default function App() {
         }
         setActiveEditFunction(func);
     };
+
+    const handleVideoFunctionClick = (func: VideoFunction) => {
+        if (func !== activeVideoFunction) {
+            setStartFrame(null);
+            setStartFramePreview(null);
+        }
+        setActiveVideoFunction(func);
+    };
+
+    const processSingleFile = useCallback((file: File, callback: (image: UploadedImage, previewUrl: string) => void) => {
+        const id = `upload-${file.name}-${Date.now()}`;
+
+        if (file.size > 10 * 1024 * 1024) {
+            setUploadProgress(prev => [...prev, { id, name: file.name, progress: 100, status: 'error', message: 'Excede o limite de 10MB.' }]);
+            setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
+            return;
+        }
+        if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+            setUploadProgress(prev => [...prev, { id, name: file.name, progress: 100, status: 'error', message: 'Tipo de arquivo inválido.' }]);
+            setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
+            return;
+        }
+
+        setUploadProgress(prev => [...prev, { id, name: file.name, progress: 0, status: 'uploading' }]);
+
+        const reader = new FileReader();
+        reader.onprogress = (event) => {
+            if (event.lengthComputable) {
+                const progress = Math.round((event.loaded / event.total) * 100);
+                setUploadProgress(p => p.map(item => item.id === id ? { ...item, progress } : item));
+            }
+        };
+        reader.onerror = () => {
+            setUploadProgress(p => p.map(item => item.id === id ? { ...item, status: 'error', message: 'Falha ao ler o arquivo.' } : item));
+            setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
+        };
+        reader.onload = () => {
+            const dataUrl = reader.result as string;
+            const uploadedImage: UploadedImage = { base64: dataUrl.split(',')[1], mimeType: file.type };
+            callback(uploadedImage, dataUrl);
+            setUploadProgress(p => p.map(item => item.id === id ? { ...item, status: 'success', progress: 100 } : item));
+            setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 1500);
+        };
+        reader.readAsDataURL(file);
+    }, []);
     
     const processUploadedFiles = useCallback((files: File[], target: 'main' | 'reference') => {
         let isMainImageSlotFilled = history.length > 0;
@@ -1125,6 +1394,7 @@ export default function App() {
                         editFunction: activeEditFunction,
                         referenceImages: [],
                     };
+                    resetDetectionState();
                     setHistory([initialEntry]);
                     setHistoryIndex(0);
                     setReferenceImages([]);
@@ -1157,7 +1427,7 @@ export default function App() {
             
             reader.readAsDataURL(file);
         });
-    }, [history.length, activeEditFunction]);
+    }, [history.length, activeEditFunction, resetDetectionState]);
 
     const handleImageUpload = useCallback((files: FileList | null, target: 'main' | 'reference') => {
         if (!files || files.length === 0 || mode !== 'edit') return;
@@ -1264,8 +1534,59 @@ export default function App() {
         }
     }, [isLoading, mode, activeCreateFunction, aspectRatio, history, historyIndex]);
 
-    const generateImageHandler = useCallback(async () => {
-        if (mode === 'create' && !prompt) {
+    const createPaddedImage = (
+        image: UploadedImage,
+        targetRatioString: '16:9' | '9:16'
+    ): Promise<UploadedImage> => {
+        return new Promise((resolve, reject) => {
+            const img = new window.Image();
+            img.crossOrigin = "anonymous";
+            img.onload = () => {
+                const targetRatio = targetRatioString === '16:9' ? 16 / 9 : 9 / 16;
+                const canvas = document.createElement('canvas');
+                
+                const canvasWidth = 1920;
+                const canvasHeight = Math.round(canvasWidth / targetRatio);
+                canvas.width = canvasWidth;
+                canvas.height = canvasHeight;
+
+                const ctx = canvas.getContext('2d');
+                if (!ctx) {
+                    return reject(new Error("Não foi possível criar o contexto do canvas"));
+                }
+
+                // 1. Preencha o fundo com preto
+                ctx.fillStyle = 'black';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // 2. Desenhe a imagem centralizada em primeiro plano
+                const imgRatio = img.width / img.height;
+                let drawWidth, drawHeight;
+
+                if (imgRatio > targetRatio) { // Imagem mais larga que o canvas
+                    drawWidth = canvas.width;
+                    drawHeight = drawWidth / imgRatio;
+                } else { // Imagem mais alta ou com a mesma proporção
+                    drawHeight = canvas.height;
+                    drawWidth = drawHeight * imgRatio;
+                }
+
+                const x = (canvas.width - drawWidth) / 2;
+                const y = (canvas.height - drawHeight) / 2;
+
+                ctx.drawImage(img, x, y, drawWidth, drawHeight);
+
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+                const base64 = dataUrl.split(',')[1];
+                resolve({ base64, mimeType: 'image/jpeg' });
+            };
+            img.onerror = () => reject(new Error("Falha ao carregar a imagem para preenchimento"));
+            img.src = `data:${image.mimeType};base64,${image.base64}`;
+        });
+    };
+
+    const handleGenerate = useCallback(async () => {
+        if (!prompt && mode !== 'edit' && activeVideoFunction !== 'animation') {
             setError('Por favor, descreva sua ideia.');
             return;
         }
@@ -1273,15 +1594,33 @@ export default function App() {
              setError('Por favor, envie ou gere uma imagem para editar.');
              return;
         }
+        if (mode === 'video' && activeVideoFunction === 'animation' && !startFrame) {
+            setError('Por favor, envie um frame inicial para a animação.');
+            return;
+        }
 
         setIsLoading(true);
         setError(null);
         
         try {
             let result: string | null = null;
+            let newEntry: HistoryEntry | null = null;
+
             if (mode === 'create') {
                 result = await generateImage(prompt, activeCreateFunction, aspectRatio, negativePrompt, styleModifier, cameraAngle, lightingStyle, comicColorPalette);
-            } else { 
+                if (result) {
+                    newEntry = {
+                        id: `hist-${Date.now()}`,
+                        imageUrl: result,
+                        prompt,
+                        mode,
+                        negativePrompt,
+                        createFunction: activeCreateFunction, 
+                        aspectRatio,
+                        comicColorPalette: activeCreateFunction === 'comic' ? comicColorPalette : undefined,
+                    };
+                }
+            } else if (mode === 'edit') { 
                 if (!generatedImage) throw new Error("Imagem para edição não encontrada.");
                 
                 const maskData = editorRef.current?.getMaskData() ?? null;
@@ -1309,50 +1648,116 @@ export default function App() {
                         result = aiResultUrl;
                     }
                 }
+                 if (result) {
+                    newEntry = {
+                        id: `hist-${Date.now()}`,
+                        imageUrl: result,
+                        prompt,
+                        mode,
+                        negativePrompt,
+                        editFunction: activeEditFunction, 
+                        referenceImages,
+                        styleStrength: activeEditFunction === 'style' ? styleStrength : undefined,
+                    };
+                }
+            } else if (mode === 'video') {
+                const aspectRatioToUse = videoAspectRatioInfo ? videoAspectRatioInfo.mappedRatio : undefined;
+                let frameToUse = startFrame;
+
+                if (activeVideoFunction === 'animation' && startFrame && videoFitMode === 'fill' && videoAspectRatioInfo) {
+                    setLoadingMessage('Preparando imagem para animação...');
+                    frameToUse = await createPaddedImage(startFrame, videoAspectRatioInfo.mappedRatio);
+                }
+
+                if (activeVideoFunction === 'animation') {
+                    if (!frameToUse) {
+                        throw new Error('Frame inicial não encontrado para animação.');
+                    }
+                    result = await generateVideo(prompt, frameToUse, aspectRatioToUse);
+                } else {
+                    result = await generateVideo(prompt);
+                }
+                
+                if (result) {
+                    newEntry = {
+                        id: `hist-${Date.now()}`,
+                        videoUrl: result,
+                        prompt,
+                        mode,
+                        videoFunction: activeVideoFunction,
+                        ...(activeVideoFunction === 'animation' && {
+                            startFrame,
+                            startFramePreviewUrl: startFramePreview,
+                        })
+                    };
+                }
             }
 
-            if (result) {
-                const newEntry: HistoryEntry = {
-                    id: `hist-${Date.now()}`,
-                    imageUrl: result,
-                    prompt,
-                    mode,
-                    negativePrompt,
-                    ...(mode === 'create'
-                      ? { 
-                          createFunction: activeCreateFunction, 
-                          aspectRatio,
-                          comicColorPalette: activeCreateFunction === 'comic' ? comicColorPalette : undefined,
-                        }
-                      : { 
-                          editFunction: activeEditFunction, 
-                          referenceImages,
-                          styleStrength: activeEditFunction === 'style' ? styleStrength : undefined,
-                        }),
-                };
-        
+            if (newEntry) {
                 const newHistory = history.slice(0, historyIndex + 1);
                 setHistory([...newHistory, newEntry]);
                 setHistoryIndex(newHistory.length);
                 editorRef.current?.clearMask();
+                resetDetectionState();
             }
 
-        } catch (error: any)
-{
+        } catch (error: any) {
             setError(error.message || 'Ocorreu um erro desconhecido.');
         } finally {
             setIsLoading(false);
         }
-    }, [prompt, mode, activeCreateFunction, activeEditFunction, aspectRatio, referenceImages, history, historyIndex, generatedImage, styleStrength, negativePrompt, styleModifier, cameraAngle, lightingStyle, comicColorPalette]);
+    }, [prompt, mode, activeCreateFunction, activeEditFunction, aspectRatio, referenceImages, history, historyIndex, generatedImage, styleStrength, negativePrompt, styleModifier, cameraAngle, lightingStyle, comicColorPalette, resetDetectionState, activeVideoFunction, startFrame, startFramePreview, videoAspectRatioInfo, videoFitMode]);
+    
+    const autoResizeTextarea = useCallback(() => {
+        const textarea = textareaRef.current;
+        if (textarea) {
+            textarea.style.height = 'auto';
+            const scrollHeight = textarea.scrollHeight;
+            textarea.style.height = `${scrollHeight}px`;
+        }
+    }, []);
+
+    const handleDetectObjects = async () => {
+        if (!generatedImage || isDetectingObjects) return;
+
+        setIsDetectingObjects(true);
+        setError(null);
+        resetDetectionState();
+
+        try {
+            const mainImageBase64 = generatedImage.split(',')[1];
+            const mainImageMimeType = generatedImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
+            const mainImage: UploadedImage = { base64: mainImageBase64, mimeType: mainImageMimeType };
+
+            const objects = await detectObjects(mainImage);
+            setDetectedObjects(objects);
+        } catch (error: any) {
+            setError(error.message || "Falha na detecção de objetos.");
+        } finally {
+            setIsDetectingObjects(false);
+        }
+    };
+    
+    const handleDetectedObjectClick = (object: DetectedObject) => {
+        setPrompt(prev => {
+            const trimmedPrev = prev.trim();
+            // Capitalize the first letter of the object name for better sentence structure
+            const objectName = object.name.charAt(0).toUpperCase() + object.name.slice(1);
+            return trimmedPrev ? `${trimmedPrev}, ${objectName.toLowerCase()}` : objectName;
+        });
+        textareaRef.current?.focus();
+        // Use a timeout to ensure the state update has rendered before resizing
+        setTimeout(autoResizeTextarea, 0);
+    };
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                if (prompt.trim() !== '') {
+                if (prompt.trim() !== '' || activeVideoFunction === 'animation') {
                     e.preventDefault();
                 }
                 if (!isLoading) {
-                    generateImageHandler();
+                    handleGenerate();
                 }
             }
         };
@@ -1363,7 +1768,7 @@ export default function App() {
         return () => {
             textarea?.removeEventListener('keydown', handleKeyDown);
         };
-    }, [isLoading, generateImageHandler, prompt]);
+    }, [isLoading, handleGenerate, prompt, activeVideoFunction]);
 
     const handleUndo = () => {
         if (historyIndex > 0) {
@@ -1373,47 +1778,50 @@ export default function App() {
 
     const handleRedo = () => {
         if (historyIndex < history.length - 1) {
-            handleHistoryNavigation(historyIndex - 1);
+            // FIX: Corrected redo logic to navigate to the next state (historyIndex + 1) instead of the previous one.
+            handleHistoryNavigation(historyIndex + 1);
         }
     };
 
-    const handleSaveImage = () => {
-        if (!generatedImage) return;
+    const handleSaveMedia = () => {
+        const urlToSave = generatedVideo || generatedImage;
+        if (!urlToSave) return;
+        
         const link = document.createElement('a');
-        link.href = generatedImage;
-        link.download = `nano-banana-studio-${Date.now()}.png`;
+        link.href = urlToSave;
+        const extension = generatedVideo ? 'mp4' : 'png';
+        link.download = `nano-banana-studio-${Date.now()}.${extension}`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
     };
 
     const performClearAll = () => {
-        // Common resets for both modes
+        // Common resets for all modes
         setHistory([]);
         setHistoryIndex(-1);
         setPrompt('');
         setReferenceImages([]);
         setError(null);
         editorRef.current?.clearMask();
+        resetDetectionState();
         
-        if (mode === 'create') {
-            // Reset to default 'create' state
-            setActiveCreateFunction('free');
-            setAspectRatio('1:1');
-            setNegativePrompt('');
-            setStyleModifier('default');
-            setCameraAngle('default');
-            setLightingStyle('default');
-            setComicColorPalette('vibrant');
-            // also reset edit mode settings for a clean slate when switching
-            setActiveEditFunction('compose');
-            setStyleStrength(100);
-            setMaskTool('brush');
-            setBrushSize(40);
-            setMaskOpacity(0.6);
-        }
-        // If in edit mode, we only perform the common resets,
-        // leaving the user in edit mode with their current function selected.
+        // Reset mode-specific settings to defaults
+        setActiveCreateFunction('free');
+        setAspectRatio('1:1');
+        setNegativePrompt('');
+        setStyleModifier('default');
+        setCameraAngle('default');
+        setLightingStyle('default');
+        setComicColorPalette('vibrant');
+        setActiveEditFunction('compose');
+        setStyleStrength(100);
+        setMaskTool('brush');
+        setBrushSize(40);
+        setMaskOpacity(0.6);
+        setActiveVideoFunction('prompt');
+        setStartFrame(null);
+        setStartFramePreview(null);
     };
 
     const handleClearAll = () => {
@@ -1421,7 +1829,7 @@ export default function App() {
             setConfirmationDialog({
                 isOpen: true,
                 title: 'Limpar Tudo?',
-                message: 'Tem certeza de que deseja limpar a imagem, as referências e o histórico? Esta ação não pode ser desfeita.',
+                message: 'Tem certeza de que deseja limpar a mídia atual, as referências e o histórico? Esta ação não pode ser desfeita.',
                 onConfirm: performClearAll,
             });
         }
@@ -1485,15 +1893,6 @@ export default function App() {
         return finalPrompt;
     }, [mode, prompt, activeCreateFunction, styleModifier, cameraAngle, lightingStyle, negativePrompt, comicColorPalette]);
 
-    const autoResizeTextarea = useCallback(() => {
-        const textarea = textareaRef.current;
-        if (textarea) {
-            textarea.style.height = 'auto';
-            const scrollHeight = textarea.scrollHeight;
-            textarea.style.height = `${scrollHeight}px`;
-        }
-    }, []);
-
     useEffect(() => {
         if (window.innerWidth < 1024) {
             setShowMobileModal(true);
@@ -1508,6 +1907,22 @@ export default function App() {
             setStyleModifier('default');
         }
     }, [activeCreateFunction]);
+
+    useEffect(() => {
+        if (mode === 'video' && activeVideoFunction === 'animation' && startFramePreview) {
+          const img = new Image();
+          img.onload = () => {
+            const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+            const commonDivisor = gcd(img.width, img.height);
+            const ratio = `${img.width / commonDivisor}:${img.height / commonDivisor}`;
+            const mappedRatio = mapImageAspectRatioToVideo(img.width, img.height);
+            setVideoAspectRatioInfo({ width: img.width, height: img.height, ratio, mappedRatio });
+          };
+          img.src = startFramePreview;
+        } else {
+          setVideoAspectRatioInfo(null);
+        }
+      }, [mode, activeVideoFunction, startFramePreview]);
     
     const getHistoryEntryTitle = (entry: HistoryEntry): string => {
         const functionNameMap: { [key: string]: string } = {
@@ -1517,33 +1932,72 @@ export default function App() {
             comic: 'Quadrinho',
             compose: 'Composição',
             style: 'Estilo',
-            transform: 'Transformação'
+            prompt: 'A Partir de Prompt',
+            animation: 'Animar Imagem'
         };
     
         if (entry.mode === 'create') {
-            return `Criar: ${functionNameMap[entry.createFunction!] || 'Ação'}`;
+            return `Criar Imagem: ${functionNameMap[entry.createFunction!] || 'Ação'}`;
         }
-        if (entry.editFunction) {
-            return `Editar: ${functionNameMap[entry.editFunction] || 'Ação'}`;
+        if (entry.mode === 'edit' && entry.editFunction) {
+            return `Editar Imagem: ${functionNameMap[entry.editFunction] || 'Ação'}`;
         }
-        return 'Imagem Carregada'; 
+        if (entry.mode === 'video') {
+            return `Gerar Vídeo: ${functionNameMap[entry.videoFunction!] || 'Ação'}`;
+        }
+        return 'Mídia Carregada'; 
     };
 
-    const getEditPlaceholder = useCallback(() => {
-        switch (activeEditFunction) {
-            case 'compose':
-                return 'Descreva o que adicionar, remover ou alterar. Ex: "Adicione um chapéu de pirata no gato".';
-            case 'style':
-                return 'Opcional: Descreva como aplicar o estilo ou deixe em branco.';
-            case 'transform':
-                return 'Descreva a transformação. Ex: "Faça parecer uma pintura a óleo".';
+    const getPromptPlaceholder = useCallback(() => {
+        switch (mode) {
+            case 'create':
+                return 'Descreva sua visão em detalhes: estilo, cores, cena, etc.';
+            case 'edit':
+                switch (activeEditFunction) {
+                    case 'compose':
+                        return 'Para edições locais, selecione uma área. Para edições globais, descreva a transformação. Ex: "Faça parecer uma pintura a óleo".';
+                    case 'style':
+                        return 'Opcional: Descreva como aplicar o estilo ou deixe em branco.';
+                    default:
+                        return 'Descreva a edição desejada.';
+                }
+            case 'video':
+                 if (activeVideoFunction === 'animation') {
+                    return 'Descreva como a imagem inicial deve ser animada (ex: "zoom in lentamente", "adicione chuva caindo").';
+                }
+                return 'Descreva a cena do vídeo que você quer criar.';
             default:
-                return 'Descreva a edição desejada.';
+                return 'Descreva sua ideia.';
         }
-    }, [activeEditFunction]);
+    }, [mode, activeEditFunction, activeVideoFunction]);
+
+    useEffect(() => {
+        let interval: number;
+        if (isLoading) {
+            const videoMessages = [
+                "Iniciando a geração do vídeo...",
+                "A mágica do vídeo leva um tempinho...",
+                "Renderizando os frames...",
+                "Finalizando os últimos detalhes..."
+            ];
+            const imageMessages = ["Gerando sua imagem...", "A mágica está acontecendo..."];
+
+            const messages = mode === 'video' ? videoMessages : imageMessages;
+            let msgIndex = 0;
+            
+            setLoadingMessage(messages[msgIndex]);
+            
+            interval = window.setInterval(() => {
+                msgIndex = (msgIndex + 1) % messages.length;
+                setLoadingMessage(messages[msgIndex]);
+            }, 4000);
+        }
+        return () => window.clearInterval(interval);
+    }, [isLoading, mode]);
 
     const isUndoDisabled = historyIndex <= 0;
     const isRedoDisabled = historyIndex >= history.length - 1;
+    const isMediaAvailable = !!generatedImage || !!generatedVideo;
 
     return (
         <div className="flex h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-300 font-sans">
@@ -1572,11 +2026,14 @@ export default function App() {
                 >
                     <span role="img" aria-label="banana icon" className="text-2xl">🍌</span>
                 </div>
-                <button onClick={() => handleModeToggle('create')} title="Criar" className={`w-full p-3 rounded-md transition-colors ${mode === 'create' ? 'bg-blue-500/20 text-blue-400' : 'text-zinc-400 hover:bg-zinc-800'}`}>
+                <button onClick={() => handleModeToggle('create')} title="Criar Imagem" className={`w-full p-3 rounded-md transition-colors ${mode === 'create' ? 'bg-blue-500/20 text-blue-400' : 'text-zinc-400 hover:bg-zinc-800'}`}>
                     <Icons.Create />
                 </button>
-                <button onClick={() => handleModeToggle('edit')} title="Editar" className={`w-full p-3 rounded-md transition-colors ${mode === 'edit' ? 'bg-blue-500/20 text-blue-400' : 'text-zinc-400 hover:bg-zinc-800'}`}>
+                <button onClick={() => handleModeToggle('edit')} title="Editar Imagem" className={`w-full p-3 rounded-md transition-colors ${mode === 'edit' ? 'bg-blue-500/20 text-blue-400' : 'text-zinc-400 hover:bg-zinc-800'}`}>
                     <Icons.Edit />
+                </button>
+                 <button onClick={() => handleModeToggle('video')} title="Gerar Vídeo" className={`w-full p-3 rounded-md transition-colors ${mode === 'video' ? 'bg-blue-500/20 text-blue-400' : 'text-zinc-400 hover:bg-zinc-800'}`}>
+                    <Icons.Video />
                 </button>
             </div>
 
@@ -1661,11 +2118,47 @@ export default function App() {
                     {mode === 'edit' && (
                         <>
                             <PanelSection title="Função de Edição" icon={<Icons.Layers />}>
-                                <div className="grid grid-cols-3 gap-2">
+                                <div className="grid grid-cols-2 gap-2">
                                     <FunctionButton data-function="compose" isActive={activeEditFunction === 'compose'} onClick={handleEditFunctionClick} icon={<Icons.Layers />} name="Composição" />
                                     <FunctionButton data-function="style" isActive={activeEditFunction === 'style'} onClick={handleEditFunctionClick} icon={<Icons.Palette />} name="Estilo" />
-                                    <FunctionButton data-function="transform" isActive={activeEditFunction === 'transform'} onClick={handleEditFunctionClick} icon={<Icons.Transform />} name="Transformar" />
                                 </div>
+                            </PanelSection>
+
+                            <PanelSection title="Análise de Imagem" icon={<Icons.Visibility />}>
+                                <button
+                                    onClick={handleDetectObjects}
+                                    disabled={!generatedImage || isDetectingObjects}
+                                    className="w-full flex items-center justify-center gap-2 p-2 text-sm font-semibold rounded-md bg-zinc-800 hover:bg-zinc-700 transition-colors disabled:bg-zinc-800/50 disabled:cursor-not-allowed"
+                                >
+                                    {isDetectingObjects ? (
+                                        <>
+                                            <Icons.Spinner className="h-4 w-4" />
+                                            <span>Analisando...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Icons.Visibility />
+                                            <span>Detectar Objetos</span>
+                                        </>
+                                    )}
+                                </button>
+                                {detectedObjects.length > 0 && (
+                                    <div className="mt-4 space-y-2 max-h-48 overflow-y-auto">
+                                        <h4 className="text-sm font-semibold text-zinc-300">Objetos Encontrados:</h4>
+                                        {detectedObjects.map((obj, index) => (
+                                            <div
+                                                key={`${obj.name}-${index}`}
+                                                className="p-2 bg-zinc-800/50 rounded-md text-sm text-zinc-300 cursor-pointer hover:bg-zinc-700/50"
+                                                onMouseEnter={() => setHighlightedObject(obj)}
+                                                onMouseLeave={() => setHighlightedObject(null)}
+                                                onClick={() => handleDetectedObjectClick(obj)}
+                                                title={`Adicionar "${obj.name}" ao prompt`}
+                                            >
+                                                {obj.name}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </PanelSection>
                             
                             {activeEditFunction === 'style' && (
@@ -1679,48 +2172,106 @@ export default function App() {
                                     />
                                 </PanelSection>
                             )}
-                            {activeEditFunction !== 'transform' && (
-                                <PanelSection title="Referências" icon={<Icons.Reference />}>
-                                    {isAnalyzingStyle && (
-                                        <div className="flex items-center gap-2 p-2 mb-3 rounded-md bg-zinc-800/50 text-sm text-zinc-300">
-                                            <Icons.Spinner className="h-4 w-4" />
-                                            <span>Analisando estilo da imagem...</span>
+                            
+                            <PanelSection title="Referências" icon={<Icons.Reference />}>
+                                {isAnalyzingStyle && (
+                                    <div className="flex items-center gap-2 p-2 mb-3 rounded-md bg-zinc-800/50 text-sm text-zinc-300">
+                                        <Icons.Spinner className="h-4 w-4" />
+                                        <span>Analisando estilo da imagem...</span>
+                                    </div>
+                                )}
+                                <div onDragEnter={(e) => handleDragEnter(e, 'reference')} onDragLeave={handleDragLeave} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, 'reference')}>
+                                    <div className={`border-2 rounded-md transition-all duration-200 ${dragTarget === 'reference' ? 'border-blue-500 bg-blue-500/10 border-solid scale-105' : 'border-zinc-800 border-dashed'}`}>
+                                        <input type="file" id="reference-upload" className="hidden" multiple accept="image/png, image/jpeg, image/webp" onChange={(e) => handleImageUpload(e.target.files, 'reference')} disabled={mode !== 'edit'} />
+                                        <label htmlFor="reference-upload" className={`${mode !== 'edit' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} flex items-center justify-center gap-2 text-center p-2`}>
+                                            <Icons.UploadCloud className="text-xl text-zinc-500" />
+                                            <span className="text-xs">Arraste ou clique para enviar</span>
+                                        </label>
+                                    </div>
+                                    {mode === 'edit' && activeEditFunction === 'style' && <p className="text-xs text-zinc-500 text-center mt-2">(Máximo de 1 imagem de estilo)</p>}
+                                    <div className="mt-4 grid grid-cols-3 gap-2">
+                                        {referenceImages.map((ref, index) => (
+                                            <div
+                                                key={index}
+                                                className="relative group aspect-square bg-zinc-800 rounded-md overflow-hidden"
+                                            >
+                                                <img
+                                                    src={ref.previewUrl}
+                                                    alt={`Reference ${index + 1}`}
+                                                    className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                                                />
+                                                <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                                                    <button
+                                                        onClick={() => handleRemoveImage(index)}
+                                                        className="p-2 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700 transition-colors"
+                                                        title="Remover"
+                                                    >
+                                                        <Icons.Close />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </PanelSection>
+                        </>
+                    )}
+                     {mode === 'video' && (
+                        <>
+                            <PanelSection title="Função de Vídeo" icon={<Icons.Video />}>
+                               <div className="grid grid-cols-2 gap-2">
+                                    <FunctionButton data-function="prompt" isActive={activeVideoFunction === 'prompt'} onClick={handleVideoFunctionClick} icon={<Icons.Prompt />} name="A Partir de Prompt" />
+                                    <FunctionButton data-function="animation" isActive={activeVideoFunction === 'animation'} onClick={handleVideoFunctionClick} icon={<Icons.Image />} name="Animar Imagem" />
+                                </div>
+                            </PanelSection>
+                            
+                            {activeVideoFunction === 'prompt' &&
+                                <PanelSection title="Geração de Vídeo" icon={<Icons.Sparkles />}>
+                                     <p className="text-sm text-zinc-400">Descreva a cena, os personagens e a ação que você deseja ver no vídeo. A IA dará vida à sua imaginação.</p>
+                                </PanelSection>
+                            }
+
+                            {activeVideoFunction === 'animation' && (
+                                <>
+                                    <PanelSection title="Imagem Inicial" icon={<Icons.Start />}>
+                                        <div className="space-y-4 h-48">
+                                            <ImageUploadSlot
+                                                id="start-frame-upload"
+                                                label="Frame Inicial"
+                                                icon={<Icons.Start />}
+                                                imagePreviewUrl={startFramePreview}
+                                                onUpload={(file) => processSingleFile(file, (img, url) => { setStartFrame(img); setStartFramePreview(url); })}
+                                                onRemove={() => { setStartFrame(null); setStartFramePreview(null); }}
+                                            />
                                         </div>
-                                    )}
-                                    <div onDragEnter={(e) => handleDragEnter(e, 'reference')} onDragLeave={handleDragLeave} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, 'reference')}>
-                                        <div className={`border-2 rounded-md transition-all duration-200 ${dragTarget === 'reference' ? 'border-blue-500 bg-blue-500/10 border-solid scale-105' : 'border-zinc-800 border-dashed'}`}>
-                                            <input type="file" id="reference-upload" className="hidden" multiple accept="image/png, image/jpeg, image/webp" onChange={(e) => handleImageUpload(e.target.files, 'reference')} disabled={mode !== 'edit'} />
-                                            <label htmlFor="reference-upload" className={`${mode !== 'edit' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} flex items-center justify-center gap-2 text-center p-2`}>
-                                                <Icons.UploadCloud className="text-xl text-zinc-500" />
-                                                <span className="text-xs">Arraste ou clique para enviar</span>
-                                            </label>
-                                        </div>
-                                        {mode === 'edit' && activeEditFunction === 'style' && <p className="text-xs text-zinc-500 text-center mt-2">(Máximo de 1 imagem de estilo)</p>}
-                                        <div className="mt-4 grid grid-cols-3 gap-2">
-                                            {referenceImages.map((ref, index) => (
-                                                <div
-                                                    key={index}
-                                                    className="relative group aspect-square bg-zinc-800 rounded-md overflow-hidden"
-                                                >
-                                                    <img
-                                                        src={ref.previewUrl}
-                                                        alt={`Reference ${index + 1}`}
-                                                        className="w-full h-full object-cover transition-transform group-hover:scale-105"
-                                                    />
-                                                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                                                        <button
-                                                            onClick={() => handleRemoveImage(index)}
-                                                            className="p-2 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700 transition-colors"
-                                                            title="Remover"
-                                                        >
-                                                            <Icons.Close />
+                                    </PanelSection>
+                                    {videoAspectRatioInfo && (
+                                        <PanelSection title="Proporção do Vídeo" icon={<Icons.AspectRatio />}>
+                                            <div className="p-3 bg-zinc-800 rounded-md space-y-4">
+                                                <div className="text-center">
+                                                    <p className="text-xs text-zinc-400">Proporção Original</p>
+                                                    <p className="text-sm font-semibold text-zinc-200">{videoAspectRatioInfo.ratio} ({`${videoAspectRatioInfo.width}x${videoAspectRatioInfo.height}`})</p>
+                                                </div>
+                                                <div>
+                                                    <label className="text-sm font-semibold text-zinc-300">Modo de Ajuste</label>
+                                                    <div className="flex gap-2 mt-2">
+                                                        <button onClick={() => setVideoFitMode('crop')} className={`flex-1 text-center py-2 border rounded-md transition-colors text-sm ${videoFitMode === 'crop' ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800/50'}`}>
+                                                            Cortar
+                                                        </button>
+                                                        <button onClick={() => setVideoFitMode('fill')} className={`flex-1 text-center py-2 border rounded-md transition-colors text-sm ${videoFitMode === 'fill' ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800/50'}`}>
+                                                            Ajustar
                                                         </button>
                                                     </div>
+                                                     <p className="text-xs text-zinc-500 mt-2 text-center">
+                                                        {videoFitMode === 'crop'
+                                                            ? `A imagem será cortada para preencher o vídeo ${videoAspectRatioInfo.mappedRatio}.`
+                                                            : `A imagem caberá no vídeo ${videoAspectRatioInfo.mappedRatio} e o espaço restante será preenchido com preto.`}
+                                                    </p>
                                                 </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </PanelSection>
+                                            </div>
+                                        </PanelSection>
+                                    )}
+                                </>
                             )}
                         </>
                     )}
@@ -1735,12 +2286,23 @@ export default function App() {
                             ) : (
                                 [...history].reverse().map((entry, revIndex) => {
                                     const index = history.length - 1 - revIndex;
+                                    const isVideoAnimation = entry.mode === 'video' && entry.videoFunction === 'animation';
                                     return (
                                     <button key={entry.id} onClick={() => handleHistoryNavigation(index)} className={`w-full flex items-center gap-3 p-2 rounded-md text-left transition-colors ${historyIndex === index ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}`}>
-                                        <img src={entry.imageUrl} alt="" className="w-10 h-10 object-cover rounded-md flex-shrink-0 bg-zinc-700" />
+                                        {entry.imageUrl ? (
+                                             <img src={entry.imageUrl} alt="" className="w-10 h-10 object-cover rounded-md flex-shrink-0 bg-zinc-700" />
+                                        ) : isVideoAnimation && entry.startFramePreviewUrl ? (
+                                            <div className="w-10 h-10 relative flex-shrink-0">
+                                                <img src={entry.startFramePreviewUrl} alt="Start frame" className="w-full h-full object-cover rounded-md bg-zinc-700" />
+                                            </div>
+                                        ) : (
+                                            <div className="w-10 h-10 flex-shrink-0 flex items-center justify-center bg-zinc-700 rounded-md">
+                                                <Icons.Video className="text-zinc-400" />
+                                            </div>
+                                        )}
                                         <div className="flex-1 min-w-0">
                                             <p className="text-xs font-semibold truncate">{getHistoryEntryTitle(entry)}</p>
-                                            <p className="text-xs text-zinc-400 truncate">{entry.prompt || 'Imagem inicial'}</p>
+                                            <p className="text-xs text-zinc-400 truncate">{entry.prompt || (isVideoAnimation ? 'Animação de imagem' : 'Mídia inicial')}</p>
                                         </div>
                                     </button>
                                 )})
@@ -1750,7 +2312,7 @@ export default function App() {
                 </div>
 
                 {/* Negative Prompt Area */}
-                { (mode === 'create' || (mode === 'edit' && activeEditFunction === 'transform')) && (
+                { (mode === 'create' || (mode === 'edit' && activeEditFunction === 'compose')) && (
                     <div className="border-b border-zinc-800 p-3 space-y-3">
                         <h3 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
                             <Icons.Block />
@@ -1788,19 +2350,19 @@ export default function App() {
                                 value={prompt}
                                 onChange={(e) => setPrompt(e.target.value)}
                                 onInput={autoResizeTextarea}
-                                placeholder={ mode === 'create' ? 'Descreva sua visão em detalhes: estilo, cores, cena, etc.' : getEditPlaceholder() }
+                                placeholder={ getPromptPlaceholder() }
                                 className="w-full bg-zinc-800 p-3 rounded-lg text-sm placeholder-zinc-500 focus:ring-1 focus:ring-blue-500 focus:outline-none resize-none pr-4 min-h-[90px] max-h-96 transition-height duration-200"
                                 rows={3}
                                 aria-label="Prompt principal"
                             />
                         </div>
                         <button 
-                            onClick={generateImageHandler} 
+                            onClick={handleGenerate} 
                             disabled={isLoading} 
                             title="Gerar (Ctrl+Enter)" 
                             className="w-full h-12 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold rounded-lg hover:from-blue-500 hover:to-indigo-500 transition-all duration-300 flex items-center justify-center gap-2 disabled:from-zinc-700 disabled:to-zinc-600 disabled:cursor-not-allowed transform active:scale-[0.99] shadow-lg hover:shadow-blue-500/30 disabled:shadow-none focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-zinc-900 focus:ring-blue-500"
                         >
-                            <span>Gerar</span>
+                            <span>{mode === 'video' ? 'Gerar Vídeo' : 'Gerar'}</span>
                         </button>
                     </div>
                 </div>
@@ -1832,8 +2394,7 @@ export default function App() {
                         <div className="absolute inset-0 bg-zinc-950/80 backdrop-blur-sm z-40 flex items-center justify-center p-8">
                             <div className="text-center">
                                 <Icons.Spinner className="h-12 w-12 mx-auto mb-4" />
-                                <h3 className="text-xl font-semibold text-zinc-200">Gerando sua imagem...</h3>
-                                <p className="text-zinc-400 mt-2">Aguarde um momento, a mágica está acontecendo.</p>
+                                <h3 className="text-xl font-semibold text-zinc-200">{loadingMessage}</h3>
                                 <div className="flex justify-center items-center space-x-2 mt-4">
                                     <div className="w-3 h-3 bg-blue-400 rounded-full animate-pulse-dots dot-1"></div>
                                     <div className="w-3 h-3 bg-blue-400 rounded-full animate-pulse-dots dot-2"></div>
@@ -1843,7 +2404,13 @@ export default function App() {
                         </div>
                     )}
                     <div className="flex-1 min-h-0">
-                        {generatedImage ? (
+                        {generatedVideo ? (
+                             <div className="w-full h-full flex items-center justify-center">
+                                <video key={generatedVideo} src={generatedVideo} controls autoPlay loop className="max-w-full max-h-full rounded-lg outline-none">
+                                    Seu navegador não suporta a tag de vídeo.
+                                </video>
+                            </div>
+                        ) : generatedImage ? (
                             <ImageEditor
                                 ref={editorRef}
                                 src={generatedImage}
@@ -1852,10 +2419,12 @@ export default function App() {
                                 brushSize={brushSize}
                                 maskOpacity={maskOpacity}
                                 onZoomChange={setEditorZoom}
+                                detectedObjects={detectedObjects}
+                                highlightedObject={highlightedObject}
                             />
                         ) : (
                             <div className="w-full h-full flex justify-center">
-                                {mode === 'create' ? (
+                                {mode === 'create' && (
                                     <div className="w-full h-full flex justify-center items-center border-2 border-dashed border-zinc-800 rounded-xl bg-zinc-900/50">
                                         <div className="text-center text-zinc-500">
                                             <Icons.Sparkles className="mx-auto text-6xl" />
@@ -1863,7 +2432,8 @@ export default function App() {
                                             <p className="mt-1 text-sm">Descreva sua ideia e clique em "Gerar".</p>
                                         </div>
                                     </div>
-                                ) : (
+                                )}
+                                {mode === 'edit' && (
                                     <label htmlFor="main-upload" className="w-full h-full flex justify-center items-center border-2 border-dashed border-zinc-800 rounded-xl cursor-pointer group hover:border-blue-500 transition-colors bg-zinc-900/50 hover:bg-blue-500/5">
                                         <input type="file" id="main-upload" className="hidden" accept="image/png, image/jpeg, image/webp" onChange={(e) => handleImageUpload(e.target.files, 'main')} />
                                         <div className="text-center text-zinc-500">
@@ -1872,6 +2442,15 @@ export default function App() {
                                             <p className="mt-1 text-sm">Arraste e solte uma imagem aqui, ou <span className="font-semibold text-blue-400">clique para enviar</span>.</p>
                                         </div>
                                     </label>
+                                )}
+                                 {mode === 'video' && (
+                                    <div className="w-full h-full flex justify-center items-center border-2 border-dashed border-zinc-800 rounded-xl bg-zinc-900/50">
+                                        <div className="text-center text-zinc-500">
+                                            <Icons.Video className="mx-auto text-6xl" />
+                                            <h2 className="mt-4 text-lg font-semibold text-zinc-400">Pronto para criar um vídeo?</h2>
+                                            <p className="mt-1 text-sm">Descreva sua cena e clique em "Gerar Vídeo".</p>
+                                        </div>
+                                    </div>
                                 )}
                             </div>
                         )}
@@ -1918,15 +2497,17 @@ export default function App() {
                         <button onClick={handleRedo} disabled={isRedoDisabled} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Refazer (Ctrl+Y)"> <Icons.Redo /> </button>
                         <div className="w-px h-6 bg-zinc-800 mx-2" />
                          <button onClick={handleClearAll} className="p-2 hover:bg-zinc-800 rounded-md" title="Limpar Tudo"> <Icons.ClearAll /> </button>
-                        <button onClick={handleSaveImage} disabled={!generatedImage} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Salvar Imagem"> <Icons.Save /> </button>
+                        <button onClick={handleSaveMedia} disabled={!isMediaAvailable} className="p-2 disabled:text-zinc-600 disabled:cursor-not-allowed hover:bg-zinc-800 rounded-md" title="Salvar Mídia"> <Icons.Save /> </button>
                     </div>
-                    <div className="flex items-center text-sm">
-                        <button onClick={() => editorRef.current?.zoomOut()} className="p-2 hover:bg-zinc-800 rounded-md" title="Diminuir Zoom"> <Icons.ZoomOut /> </button>
-                        <div className="w-14 text-center cursor-pointer" onClick={() => editorRef.current?.zoomToFit()} title="Ajustar à Tela"> {Math.round(editorZoom)}% </div>
-                        <button onClick={() => editorRef.current?.zoomIn()} className="p-2 hover:bg-zinc-800 rounded-md" title="Aumentar Zoom"> <Icons.ZoomIn /> </button>
-                        <div className="w-px h-6 bg-zinc-700 mx-2" />
-                        <button onClick={() => editorRef.current?.zoomToFit()} className="p-2 hover:bg-zinc-800 rounded-md" title="Ajustar à Tela"> <Icons.FitScreen /> </button>
-                    </div>
+                    { mode !== 'video' && (
+                        <div className="flex items-center text-sm">
+                            <button onClick={() => editorRef.current?.zoomOut()} className="p-2 hover:bg-zinc-800 rounded-md" title="Diminuir Zoom"> <Icons.ZoomOut /> </button>
+                            <div className="w-14 text-center cursor-pointer" onClick={() => editorRef.current?.zoomToFit()} title="Ajustar à Tela"> {Math.round(editorZoom)}% </div>
+                            <button onClick={() => editorRef.current?.zoomIn()} className="p-2 hover:bg-zinc-800 rounded-md" title="Aumentar Zoom"> <Icons.ZoomIn /> </button>
+                            <div className="w-px h-6 bg-zinc-700 mx-2" />
+                            <button onClick={() => editorRef.current?.zoomToFit()} className="p-2 hover:bg-zinc-800 rounded-md" title="Ajustar à Tela"> <Icons.FitScreen /> </button>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

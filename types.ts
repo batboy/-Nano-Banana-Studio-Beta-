@@ -1,6 +1,20 @@
-export type Mode = 'create' | 'edit';
+export type Mode = 'create' | 'edit' | 'video';
 export type CreateFunction = 'free' | 'sticker' | 'text' | 'comic';
-export type EditFunction = 'compose' | 'style' | 'transform';
+export type EditFunction = 'compose' | 'style';
+export type VideoFunction = 'prompt' | 'animation';
+
+export interface BoundingBox {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+export interface DetectedObject {
+  name: string;
+  // FIX: Corrected typo from Bounding-Box to BoundingBox
+  box: BoundingBox;
+}
 
 export interface UploadedImage {
   base64: string;
@@ -16,7 +30,8 @@ export interface ReferenceImage {
 
 export interface HistoryEntry {
   id: string;
-  imageUrl: string;
+  imageUrl?: string;
+  videoUrl?: string;
 
   // Common state
   prompt: string;
@@ -32,6 +47,11 @@ export interface HistoryEntry {
   editFunction?: EditFunction;
   referenceImages?: ReferenceImage[];
   styleStrength?: number;
+
+  // Video mode state
+  videoFunction?: VideoFunction;
+  startFrame?: UploadedImage;
+  startFramePreviewUrl?: string;
 }
 
 export interface UploadProgress {
