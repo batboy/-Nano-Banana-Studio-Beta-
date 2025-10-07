@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Modality, GenerateContentResponse, Type } from "@google/genai";
 import { UploadedImage, EditFunction, ReferenceImage, DetectedObject } from '../types';
 
@@ -6,6 +7,77 @@ if (!process.env.API_KEY) {
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+// Helper function for consistent and more informative error handling
+const handleGeminiError = (e: any, context: string): Error => {
+    console.error(`Gemini API Error (${context}):`, e);
+    const errorMessage = (e?.message || JSON.stringify(e) || '').toLowerCase();
+
+    if (errorMessage.includes('api key not valid')) {
+        return new Error("A chave da API é inválida. Por favor, contate o suporte.");
+    }
+    if (errorMessage.includes('quota') || errorMessage.includes('resource_exhausted')) {
+        return new Error(`Sua cota de uso da API foi excedida durante a ${context}. Por favor, tente novamente mais tarde.`);
+    }
+    if (errorMessage.includes('safety') || errorMessage.includes('blocked')) {
+        return new Error(`A ${context} foi bloqueada por motivos de segurança. Por favor, ajuste seu prompt ou imagem.`);
+    }
+    if (errorMessage.includes('network') || errorMessage.includes('fetch') || errorMessage.includes('failed to fetch')) {
+        return new Error(`Ocorreu um erro de rede durante a ${context}. Verifique sua conexão com a internet e tente novamente.`);
+    }
+    if (errorMessage.includes('400') || errorMessage.includes('invalid argument')) {
+        return new Error(`A solicitação para ${context} é inválida. Isso pode ser causado por um prompt malformado ou uma imagem incompatível.`);
+    }
+
+    // Generic fallback for other server-side or unexpected errors
+    return new Error(`Ocorreu um erro inesperado durante a ${context}. A API pode estar temporariamente indisponível. Tente novamente.`);
+};
+
+
+export const generateObjectMask = async (image: UploadedImage): Promise<UploadedImage> => {
+    const model = 'gemini-2.5-flash-image';
+    const prompt = `
+        **TASK: OBJECT MASK CREATION**
+        1. Identify the single, most prominent subject in the provided image.
+        2. Create a precise, clean, solid white mask of ONLY that subject.
+        3. The background MUST be solid black.
+        4. Do not include shadows or any other elements in the mask. The mask must be pure white (#FFFFFF) and the background pure black (#000000).
+        5. The output MUST be an image, matching the dimensions of the input image.
+    `;
+
+    const imagePart = {
+        inlineData: {
+            data: image.base64,
+            mimeType: image.mimeType,
+        },
+    };
+
+    try {
+        const response = await ai.models.generateContent({
+            model,
+            contents: { parts: [imagePart, { text: prompt }] },
+            config: {
+                responseModalities: [Modality.IMAGE],
+            },
+        });
+        
+        const candidate = response.candidates?.[0];
+        if (candidate?.content.parts) {
+            for (const part of candidate.content.parts) {
+                if (part.inlineData) {
+                    return {
+                        base64: part.inlineData.data,
+                        mimeType: part.inlineData.mimeType,
+                    };
+                }
+            }
+        }
+        throw new Error("O modelo não retornou uma máscara de imagem.");
+
+    } catch (e: any) {
+        throw handleGeminiError(e, "geração da máscara do objeto");
+    }
+};
 
 export const analyzeImageStyle = async (image: UploadedImage): Promise<string> => {
     const model = 'gemini-2.5-flash';
@@ -107,8 +179,7 @@ export const detectObjects = async (image: UploadedImage): Promise<DetectedObjec
         return processedObjects;
 
     } catch (e: any) {
-        console.error("Gemini API Error (detectObjects):", e);
-        throw new Error("Não foi possível detectar objetos na imagem. A API pode estar indisponível ou a imagem pode não ser suportada.");
+        throw handleGeminiError(e, "detecção de objetos");
     }
 };
 
@@ -127,8 +198,7 @@ export const fileToBase64 = (file: File): Promise<UploadedImage> => {
 
 export const generateVideo = async (
     prompt: string,
-    startFrame?: UploadedImage,
-    aspectRatio?: string
+    startFrame?: UploadedImage
 ): Promise<string> => {
     try {
         const imagePayload = startFrame ? {
@@ -142,7 +212,6 @@ export const generateVideo = async (
             ...(imagePayload && { image: imagePayload }),
             config: {
                 numberOfVideos: 1,
-                ...(aspectRatio && { aspectRatio }),
             }
         });
 
@@ -166,8 +235,7 @@ export const generateVideo = async (
         return URL.createObjectURL(videoBlob);
 
     } catch (e: any) {
-        console.error("Gemini API Error (generateVideo):", e);
-        throw new Error("Ocorreu um erro na geração do vídeo. Verifique seu prompt e tente novamente.");
+        throw handleGeminiError(e, "geração de vídeo");
     }
 };
 
@@ -263,8 +331,7 @@ export const generateImage = async (
             },
         });
     } catch (e: any) {
-        console.error("Gemini API Error (generateImage):", e);
-        throw new Error("Ocorreu um erro na comunicação com a API. Verifique sua conexão e tente novamente.");
+        throw handleGeminiError(e, "geração da imagem");
     }
 
 
@@ -290,7 +357,14 @@ export const processImagesWithPrompt = async (
     const parts: any[] = [];
     
     const dimensionInstruction = originalSize
-        ? `**REGRA CRÍTICA E OBRIGATÓRIA**: A imagem de saída DEVE ter exatamente as mesmas dimensões da imagem original: ${originalSize.width}px por ${originalSize.height}px. NÃO corte, redimensione, estique, ou altere a proporção. A cena inteira da imagem original deve estar presente no resultado final, apenas com as edições aplicadas.`
+        ? `
+**TAREFA DE EXPANSÃO (OUTPAINTING) / EDIÇÃO COM MÁSCARA:** A imagem de entrada contém uma imagem central e/ou áreas a serem editadas, indicadas por uma máscara.
+Sua tarefa é gerar uma nova imagem seguindo estas regras CRÍTICAS:
+
+1.  **PRESERVAÇÃO ABSOLUTA:** O conteúdo na área **NÃO MASCARADA** da imagem de entrada DEVE ser mantido perfeitamente intacto, sem qualquer alteração.
+2.  **PREENCHIMENTO COMPLETO:** O conteúdo na área **MASCARADA** DEVE ser totalmente substituído por novo conteúdo gerado por IA, que se integre de forma coesa e natural ao restante da imagem, de acordo com o prompt.
+3.  **DIMENSÕES FINAIS:** A imagem de saída DEVE ter exatamente as mesmas dimensões da imagem de entrada: ${originalSize.width}px por ${originalSize.height}px. Não altere a proporção.
+`
         : '';
 
     if (editFunction === 'style') {
@@ -330,7 +404,8 @@ export const processImagesWithPrompt = async (
         if (hasMask) {
             // MASKED EDIT (Inpainting/Outpainting)
             if (!prompt && referenceImages.length === 0) {
-                throw new Error("Por favor, descreva a edição ou adicione uma imagem de referência para guiar a modificação na área selecionada.");
+                // Modified to support promptless object removal
+                prompt = "Remova o objeto ou preencha a área selecionada de forma realista e coesa com o fundo, fazendo com que a edição seja imperceptível.";
             }
 
             parts.push({ text: "**IMAGEM PRINCIPAL (Conteúdo)**\nEsta é a imagem a ser editada. Suas dimensões e conteúdo fora da máscara DEVEM ser preservados." });
@@ -393,16 +468,16 @@ ${dimensionInstruction}
 
     let response: GenerateContentResponse;
     try {
+        // Using gemini-2.5-flash-image, the latest SOTA model for image editing (Nano Banana).
         response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-image-preview',
+            model: 'gemini-2.5-flash-image',
             contents: { parts: parts },
             config: {
                 responseModalities: [Modality.IMAGE, Modality.TEXT],
             },
         });
     } catch(e: any) {
-        console.error("Gemini API Error (processImagesWithPrompt):", e);
-        throw new Error("Ocorreu um erro na comunicação com a API. Verifique sua conexão e tente novamente.");
+        throw handleGeminiError(e, "edição de imagem");
     }
     
     const candidate = response.candidates?.[0];

@@ -1,3 +1,4 @@
+
 export type Mode = 'create' | 'edit' | 'video';
 export type CreateFunction = 'free' | 'sticker' | 'text' | 'comic';
 export type EditFunction = 'compose' | 'style';
@@ -12,7 +13,6 @@ export interface BoundingBox {
 
 export interface DetectedObject {
   name: string;
-  // FIX: Corrected typo from Bounding-Box to BoundingBox
   box: BoundingBox;
 }
 
@@ -26,6 +26,7 @@ export interface ReferenceImage {
   previewUrl: string;
   mask: UploadedImage | null;
   maskedObjectPreviewUrl?: string;
+  isExtractingObject?: boolean;
 }
 
 export interface HistoryEntry {

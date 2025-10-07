@@ -1,3 +1,4 @@
+
 import React from 'react';
 
 // Base component for all icons
@@ -45,6 +46,11 @@ export const ChevronDown = (props: React.HTMLAttributes<HTMLSpanElement>) => <Ma
 export const Transform = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="auto_fix_high" {...props} />;
 export const Visibility = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="visibility" {...props} />;
 export const Start = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="start" {...props} />;
+export const ContentCut = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="content_cut" {...props} />;
+export const AddPhoto = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="add_photo_alternate" {...props} />;
+export const Check = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="check" {...props} />;
+export const RotateRight = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="rotate_right" {...props} />;
+export const Filter = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="photo_filter" {...props} />;
 
 
 export const Spinner = ({ className, ...props }: React.HTMLAttributes<SVGSVGElement>) => (
