@@ -86,10 +86,7 @@ const PanelSection: React.FC<{ title: string; icon: React.ReactNode; children: R
 
 interface ImageEditorProps {
   src: string;
-  isSelectionEnabled: boolean;
-  maskTool: 'brush' | 'eraser';
-  brushSize: number;
-  maskOpacity: number;
+  activeEditFunction: EditFunction | null;
   onZoomChange: (zoom: number) => void;
   detectedObjects: DetectedObject[];
   highlightedObject: DetectedObject | null;
@@ -110,7 +107,7 @@ interface ImageEditorRef {
   stampObjectOnMask: (data: { previewUrl: string, placerTransform: any, maskOpacity: number, editorTransform: { scale: number, x: number, y: number } }) => void;
 }
 
-const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelectionEnabled, maskTool, brushSize, maskOpacity, onZoomChange, detectedObjects, highlightedObject, onTransformChange }, ref) => {
+const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeEditFunction, onZoomChange, detectedObjects, highlightedObject, onTransformChange }, ref) => {
     const imageCanvasRef = useRef<HTMLCanvasElement>(null);
     const maskCanvasRef = useRef<HTMLCanvasElement>(null);
     const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -119,18 +116,12 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
     const miniMapCanvasRef = useRef<HTMLCanvasElement>(null);
     const isMiniMapPanningRef = useRef(false);
 
-    const [isDrawing, setIsDrawing] = useState(false);
-    const lastPositionRef = useRef<{ x: number, y: number } | null>(null);
-    const [cursorPreview, setCursorPreview] = useState({ x: 0, y: 0, visible: false });
-    
     const [transform, setTransform] = useState({ scale: 1, x: 0, y: 0 });
     const isPanningRef = useRef(false);
     const panStartRef = useRef({ x: 0, y: 0 });
     const zoomToFitScale = useRef<number>(1);
     const isSpacebarDownRef = useRef(false);
     
-    const currentStrokePointsRef = useRef<{ x: number, y: number }[]>([]);
-
     useEffect(() => {
         onTransformChange(transform);
     }, [transform, onTransformChange]);
@@ -154,21 +145,6 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
     useEffect(() => {
         onZoomChange(transform.scale * 100);
     }, [transform.scale, onZoomChange]);
-
-    const getCoords = useCallback((e: React.MouseEvent<HTMLElement> | MouseEvent): [number, number] => {
-        const canvas = maskCanvasRef.current;
-        if (!canvas || canvas.width === 0) return [0, 0];
-    
-        const rect = canvas.getBoundingClientRect();
-    
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-    
-        const canvasX = (e.clientX - rect.left) * scaleX;
-        const canvasY = (e.clientY - rect.top) * scaleY;
-        
-        return [canvasX, canvasY];
-    }, []);
 
     const drawMiniMap = useCallback(() => {
         const miniMapCanvas = miniMapCanvasRef.current;
@@ -300,167 +276,6 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
         });
 
     }, [detectedObjects, highlightedObject]);
-
-    const floodFill = useCallback((canvas: HTMLCanvasElement, startX: number, startY: number, opacity: number) => {
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        if (!ctx) return;
-    
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const { width, height } = canvas;
-        const data = imageData.data;
-        
-        const alpha = Math.round(opacity * 255);
-        const fillColorRgba = [74, 222, 128, alpha]; // Green
-        
-        const startPixelPos = (startY * width + startX) * 4;
-        
-        if (data[startPixelPos + 3] > 10) return;
-    
-        const pixelStack = [[startX, startY]];
-    
-        while (pixelStack.length) {
-            const newPos = pixelStack.pop();
-            if (!newPos) continue;
-            let [x, y] = newPos;
-    
-            let pixelPos = (y * width + x) * 4;
-            while (y-- >= 0 && data[pixelPos + 3] < 10) {
-                pixelPos -= width * 4;
-            }
-            pixelPos += width * 4;
-            y++;
-            
-            let reachLeft = false;
-            let reachRight = false;
-    
-            while (y++ < height - 1 && data[pixelPos + 3] < 10) {
-                data[pixelPos] = fillColorRgba[0];
-                data[pixelPos + 1] = fillColorRgba[1];
-                data[pixelPos + 2] = fillColorRgba[2];
-                data[pixelPos + 3] = fillColorRgba[3];
-    
-                if (x > 0) {
-                    if (data[pixelPos - 4 + 3] < 10) {
-                        if (!reachLeft) {
-                            pixelStack.push([x - 1, y]);
-                            reachLeft = true;
-                        }
-                    } else if (reachLeft) {
-                        reachLeft = false;
-                    }
-                }
-    
-                if (x < width - 1) {
-                    if (data[pixelPos + 4 + 3] < 10) {
-                        if (!reachRight) {
-                            pixelStack.push([x + 1, y]);
-                            reachRight = true;
-                        }
-                    } else if (reachRight) {
-                        reachRight = false;
-                    }
-                }
-                
-                pixelPos += width * 4;
-            }
-        }
-        
-        ctx.putImageData(imageData, 0, 0);
-    }, []);
-
-    const fillEnclosedArea = useCallback((points: {x: number, y: number}[]) => {
-        const canvas = maskCanvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        const centroid = points.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
-        centroid.x /= points.length;
-        centroid.y /= points.length;
-        const seedX = Math.floor(centroid.x);
-        const seedY = Math.floor(centroid.y);
-    
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = canvas.width;
-        tempCanvas.height = canvas.height;
-        const tempCtx = tempCanvas.getContext('2d');
-        if(!tempCtx) return;
-
-        tempCtx.drawImage(canvas, 0, 0);
-
-        tempCtx.beginPath();
-        tempCtx.moveTo(points[0].x, points[0].y);
-        for (let i = 1; i < points.length; i++) {
-            tempCtx.lineTo(points[i].x, points[i].y);
-        }
-        tempCtx.closePath();
-        tempCtx.lineWidth = brushSize;
-        tempCtx.lineCap = 'round';
-        tempCtx.lineJoin = 'round';
-        tempCtx.strokeStyle = `rgba(74, 222, 128, ${maskOpacity})`; // Green
-        tempCtx.stroke();
-        
-        floodFill(tempCanvas, seedX, seedY, maskOpacity);
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(tempCanvas, 0, 0);
-
-    }, [brushSize, floodFill, maskOpacity]);
-
-    const startDrawing = (e: React.MouseEvent<HTMLDivElement>) => {
-        setIsDrawing(true);
-        const [x, y] = getCoords(e);
-        lastPositionRef.current = { x, y };
-        currentStrokePointsRef.current = [{ x, y }];
-    };
-
-    const stopDrawing = () => {
-        if (!isDrawing) return;
-        setIsDrawing(false);
-        lastPositionRef.current = null;
-        
-        if (maskTool === 'brush' && currentStrokePointsRef.current.length > 3) {
-            const points = currentStrokePointsRef.current;
-            const startPoint = points[0];
-            const endPoint = points[points.length - 1];
-            const distance = Math.sqrt(Math.pow(endPoint.x - startPoint.x, 2) + Math.pow(endPoint.y - startPoint.y, 2));
-
-            const triggerDistance = 40;
-
-            if (distance < triggerDistance) {
-                fillEnclosedArea(points);
-            }
-        }
-        currentStrokePointsRef.current = [];
-    };
-
-    const draw = (e: React.MouseEvent<HTMLDivElement>) => {
-        if (!isDrawing || !lastPositionRef.current) return;
-        const ctx = maskCanvasRef.current?.getContext('2d');
-        if (!ctx) return;
-        
-        const [currentX, currentY] = getCoords(e);
-        currentStrokePointsRef.current.push({ x: currentX, y: currentY });
-
-        ctx.lineWidth = brushSize;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-
-        if (maskTool === 'brush') {
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.strokeStyle = `rgba(74, 222, 128, ${maskOpacity})`; // Green
-        } else {
-            ctx.globalCompositeOperation = 'destination-out';
-            ctx.strokeStyle = 'rgba(0,0,0,1)';
-        }
-        
-        ctx.beginPath();
-        ctx.moveTo(lastPositionRef.current.x, lastPositionRef.current.y);
-        ctx.lineTo(currentX, currentY);
-        ctx.stroke();
-
-        lastPositionRef.current = { x: currentX, y: currentY };
-    };
 
      const handleZoomSliderChange = useCallback((newScaleValue: number) => {
         const container = containerRef.current;
@@ -610,7 +425,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
             
             isSpacebarDownRef.current = false;
             if (containerRef.current && !isPanningRef.current) {
-                containerRef.current.style.cursor = isSelectionEnabled ? 'none' : 'grab';
+                containerRef.current.style.cursor = 'grab';
             }
         };
 
@@ -621,7 +436,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
             window.removeEventListener('keydown', handleKeyDown);
             window.removeEventListener('keyup', handleKeyUp);
         };
-    }, [isSelectionEnabled]);
+    }, []);
     
     const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
         if (!containerRef.current) return;
@@ -646,9 +461,6 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
             panStartRef.current = { x: e.clientX - transform.x, y: e.clientY - transform.y };
             if (containerRef.current) containerRef.current.style.cursor = 'grabbing';
         } 
-        else if (e.button === 0 && isSelectionEnabled) {
-            startDrawing(e);
-        }
     };
     
     const stopPanning = useCallback(() => {
@@ -657,16 +469,11 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
         if (containerRef.current) {
             containerRef.current.style.cursor = isSpacebarDownRef.current 
                 ? 'grab' 
-                : isSelectionEnabled 
-                    ? 'none' 
-                    : 'grab';
+                : 'grab';
         }
-    }, [isSelectionEnabled]);
+    }, []);
 
     const handleContainerMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
-        if (isDrawing && e.button === 0) {
-            stopDrawing();
-        }
         stopPanning();
     };
     
@@ -678,19 +485,11 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
             const x = e.clientX - panStartRef.current.x;
             const y = e.clientY - panStartRef.current.y;
             setTransform(prev => ({ ...prev, x, y }));
-        } else {
-            const rect = container.getBoundingClientRect();
-            setCursorPreview({ x: e.clientX - rect.left, y: e.clientY - rect.top, visible: true });
-            if (isDrawing) draw(e);
         }
     };
     
     const handleContainerMouseLeave = () => {
-        if (isDrawing) {
-            stopDrawing();
-        }
         stopPanning();
-        setCursorPreview(prev => ({ ...prev, visible: false }));
     };
 
     const handleMiniMapPan = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -744,7 +543,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
              onMouseUp={handleContainerMouseUp}
              onMouseLeave={handleContainerMouseLeave}
              onContextMenu={(e) => e.preventDefault()}
-             style={{ cursor: isSelectionEnabled ? 'none' : 'grab' }}
+             style={{ cursor: 'grab' }}
              >
             <div 
                 className="absolute top-0 left-0"
@@ -757,32 +556,13 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, isSelec
                 <canvas
                     ref={maskCanvasRef}
                     className="absolute top-0 left-0 transition-opacity duration-200"
-                    style={{ opacity: isSelectionEnabled ? maskOpacity : 0 }}
+                    style={{ opacity: activeEditFunction === 'compose' ? 0.6 : 0 }}
                 />
                 <canvas
                     ref={overlayCanvasRef}
                     className="absolute top-0 left-0 pointer-events-none"
                 />
             </div>
-            {isSelectionEnabled && cursorPreview.visible && (
-                 <div
-                    className="absolute pointer-events-none rounded-full border-2"
-                    style={{
-                        left: cursorPreview.x,
-                        top: cursorPreview.y,
-                        width: brushSize * transform.scale,
-                        height: brushSize * transform.scale,
-                        transform: 'translate(-50%, -50%)',
-                        borderColor: maskTool === 'brush' ? 'rgba(74, 222, 128, 0.8)' : 'rgba(239, 68, 68, 0.8)',
-                        boxShadow: '0 0 8px rgba(0, 0, 0, 0.5)',
-                        transition: 'width 0.1s ease, height 0.1s ease',
-                        ...(maskTool === 'eraser' && {
-                             backgroundColor: 'rgba(239, 68, 68, 0.2)'
-                        })
-                    }}
-                />
-            )}
-            
             {showMiniMap && (
                 <div 
                     className="absolute top-4 right-4 bg-zinc-950/70 backdrop-blur-sm rounded-lg shadow-lg ring-1 ring-white/10 overflow-hidden"
@@ -1016,9 +796,6 @@ export default function App() {
     const [confirmationDialog, setConfirmationDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
     
     // Editor-specific state
-    const [maskTool, setMaskTool] = useState<'brush' | 'eraser'>('brush');
-    const [brushSize, setBrushSize] = useState(40);
-    const [maskOpacity, setMaskOpacity] = useState(0.6);
     const [editorZoom, setEditorZoom] = useState(100);
     const [editorTransform, setEditorTransform] = useState({ scale: 1, x: 0, y: 0 });
     
@@ -1274,32 +1051,6 @@ export default function App() {
             setCurrentImageAspectRatio(null);
         }
     }, [generatedImage]);
-
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (mode !== 'edit' || activeEditFunction !== 'compose') return;
-
-            const activeEl = document.activeElement;
-            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) return;
-
-            const step = 5;
-
-            if (e.key === '[') {
-                e.preventDefault();
-                setBrushSize(prev => Math.max(5, prev - step));
-            } else if (e.key === ']') {
-                e.preventDefault();
-                setBrushSize(prev => Math.min(100, prev + step));
-            }
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-
-        return () => {
-            window.removeEventListener('keydown', handleKeyDown);
-        };
-    }, [mode, activeEditFunction]);
-
 
     const resetImages = () => {
         setReferenceImages([]);
@@ -1951,7 +1702,6 @@ export default function App() {
     const canUndo = historyIndex > 0;
     const canRedo = historyIndex < history.length - 1;
     const isEditing = mode === 'edit';
-    const isSelectionEnabled = isEditing && activeEditFunction === 'compose';
     const showAdvancedCreateControls = activeCreateFunction === 'free' || activeCreateFunction === 'comic';
 
 
@@ -1993,10 +1743,7 @@ export default function App() {
                         ref={editorRef}
                         key={generatedImage}
                         src={generatedImage}
-                        isSelectionEnabled={isSelectionEnabled}
-                        maskTool={maskTool}
-                        brushSize={brushSize}
-                        maskOpacity={maskOpacity}
+                        activeEditFunction={isEditing ? activeEditFunction : null}
                         onZoomChange={setEditorZoom}
                         detectedObjects={detectedObjects}
                         highlightedObject={highlightedObject}
@@ -2011,7 +1758,7 @@ export default function App() {
                                 editorRef.current?.stampObjectOnMask({
                                     previewUrl: referenceImages[placingImageIndex].maskedObjectPreviewUrl || referenceImages[placingImageIndex].previewUrl,
                                     placerTransform,
-                                    maskOpacity,
+                                    maskOpacity: 0.6,
                                     editorTransform,
                                 });
                                 setPlacingImageIndex(null);
@@ -2180,31 +1927,39 @@ export default function App() {
                             
                             <PanelSection title="Imagens de Referência" icon={<Icons.Reference />}>
                                 {activeEditFunction === 'compose' ? (
-                                    <div className="grid grid-cols-2 gap-2 h-32">
-                                        {referenceImages.slice(0, 4).map((ref, index) => (
-                                            <div key={index} className="relative group w-full h-full bg-zinc-800 rounded-md overflow-hidden">
-                                                <img src={ref.previewUrl} alt={`Referência ${index + 1}`} className="w-full h-full object-contain" />
-                                                <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                                                    <button onClick={() => setPlacingImageIndex(index)} className="p-2 bg-zinc-900/80 text-blue-400 rounded-full hover:bg-zinc-700 transition-colors" title="Posicionar Objeto">
-                                                        <Icons.AddPhoto />
-                                                    </button>
-                                                    <button onClick={() => handleRemoveReferenceImage(index)} className="p-2 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700 transition-colors" title="Remover">
-                                                        <Icons.Close />
-                                                    </button>
+                                    <>
+                                        <div className="grid grid-cols-2 gap-2 h-32">
+                                            {referenceImages.slice(0, 4).map((ref, index) => (
+                                                <div key={index} className="relative group w-full h-full bg-zinc-800 rounded-md overflow-hidden">
+                                                    <img src={ref.previewUrl} alt={`Referência ${index + 1}`} className="w-full h-full object-contain" />
+                                                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                                                        <button onClick={() => setPlacingImageIndex(index)} className="p-2 bg-zinc-900/80 text-blue-400 rounded-full hover:bg-zinc-700 transition-colors" title="Posicionar Objeto">
+                                                            <Icons.AddPhoto />
+                                                        </button>
+                                                        <button onClick={() => handleRemoveReferenceImage(index)} className="p-2 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700 transition-colors" title="Remover">
+                                                            <Icons.Close />
+                                                        </button>
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        ))}
-                                        {referenceImages.length < 4 && (
-                                            <ImageUploadSlot
-                                                id="ref-upload-compose"
-                                                label="Referência"
-                                                icon={<Icons.UploadCloud className="text-3xl" />}
-                                                imagePreviewUrl={null}
-                                                onUpload={(file) => processUploadedFiles([file], 'reference')}
-                                                onRemove={() => {}}
-                                            />
-                                        )}
-                                    </div>
+                                            ))}
+                                            {referenceImages.length < 4 && (
+                                                <ImageUploadSlot
+                                                    id="ref-upload-compose"
+                                                    label="Referência"
+                                                    icon={<Icons.UploadCloud className="text-3xl" />}
+                                                    imagePreviewUrl={null}
+                                                    onUpload={(file) => processUploadedFiles([file], 'reference')}
+                                                    onRemove={() => {}}
+                                                />
+                                            )}
+                                        </div>
+                                         <button
+                                            onClick={() => editorRef.current?.clearMask()}
+                                            className="w-full text-sm font-semibold py-2 px-3 bg-zinc-800 hover:bg-zinc-700 rounded-md transition-colors flex items-center justify-center gap-2 mt-4"
+                                        >
+                                            <Icons.Deselect /> Limpar Objetos Posicionados
+                                        </button>
+                                    </>
                                 ) : (
                                     <div className="h-32">
                                         <ImageUploadSlot
@@ -2237,38 +1992,6 @@ export default function App() {
                                 </PanelSection>
                             )}
 
-                             {isSelectionEnabled && (
-                                <PanelSection title="Seleção" icon={<Icons.Selection />}>
-                                    <div className="flex items-center gap-2 bg-zinc-900 p-1 rounded-md">
-                                        <button 
-                                            onClick={() => setMaskTool('brush')}
-                                            className={`w-1/2 flex items-center justify-center gap-1 text-xs font-semibold px-2 py-1.5 rounded-md transition-colors ${maskTool === 'brush' ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-700/50'}`}
-                                        >
-                                            <Icons.Brush /> Pincel
-                                        </button>
-                                        <button
-                                             onClick={() => setMaskTool('eraser')}
-                                             className={`w-1/2 flex items-center justify-center gap-1 text-xs font-semibold px-2 py-1.5 rounded-md transition-colors ${maskTool === 'eraser' ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-700/50'}`}
-                                        >
-                                             <Icons.Eraser /> Borracha
-                                        </button>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <div className="text-sm text-zinc-300">Tamanho ({brushSize})</div>
-                                        <Slider value={brushSize} min={5} max={100} onChange={(e) => setBrushSize(Number(e.target.value))} 'aria-label'="Tamanho do pincel" sliderWidthClass='w-full' />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <div className="text-sm text-zinc-300">Opacidade ({Math.round(maskOpacity * 100)}%)</div>
-                                        <Slider value={maskOpacity} min={0.1} max={1} step={0.05} onChange={(e) => setMaskOpacity(Number(e.target.value))} 'aria-label'="Opacidade da máscara" sliderWidthClass='w-full' />
-                                    </div>
-                                    <button
-                                        onClick={() => editorRef.current?.clearMask()}
-                                        className="w-full text-sm font-semibold py-2 px-3 bg-zinc-800 hover:bg-zinc-700 rounded-md transition-colors flex items-center justify-center gap-2"
-                                    >
-                                        <Icons.Deselect /> Limpar Seleção
-                                    </button>
-                                </PanelSection>
-                            )}
                              {activeEditFunction === 'compose' && (
                                 <PanelSection title="Detecção de Objetos" icon={<Icons.Visibility />}>
                                     <button 
