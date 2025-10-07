@@ -63,11 +63,11 @@ const ToolbarButton: React.FC<{
 );
 
 
-const PanelSection: React.FC<{ title: string; icon: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean }> = ({ title, icon, children, defaultOpen = true }) => {
+const PanelSection: React.FC<{ title: string; icon: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean; className?: string; }> = ({ title, icon, children, defaultOpen = true, className }) => {
     const [isOpen, setIsOpen] = useState(defaultOpen);
 
     return (
-        <div className="border-b border-zinc-800">
+        <div className={`border-b border-zinc-800 ${className ?? ''}`.trim()}>
             <button
                 onClick={() => setIsOpen(!isOpen)}
                 className="w-full flex items-center justify-between p-2 text-xs font-bold text-zinc-300 hover:bg-zinc-800/50"
@@ -1316,35 +1316,55 @@ export default function App() {
 
             <aside className="app-sidebar bg-zinc-900 border-l border-zinc-800 flex flex-col">
                 <div className="flex-1 overflow-y-auto">
-                    <PanelSection title="Prompt" icon={<Icons.Prompt />}>
-                         <form onSubmit={handleSubmit} className="space-y-3">
-                            <textarea
-                                ref={textareaRef} value={prompt} onChange={(e) => setPrompt(e.target.value)}
-                                placeholder={ mode === 'create' ? "Um astronauta surfando em um anel de saturno..." : mode === 'edit' ? "Adicione um chapéu de cowboy na pessoa..." : "Um close-up de uma gota de chuva..." }
-                                rows={3} className="w-full bg-zinc-800 rounded-md p-2 text-sm text-zinc-300 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none transition-shadow" disabled={isLoading}
-                            />
-                             {(mode === 'create' || mode === 'edit') && (
-                                <textarea
-                                    ref={negativeTextareaRef} value={negativePrompt} onChange={(e) => setNegativePrompt(e.target.value)}
-                                    placeholder="Prompt Negativo: evite baixa qualidade, texto..."
-                                    rows={2} className="w-full bg-zinc-800 rounded-md p-2 text-sm text-zinc-300 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none transition-shadow" disabled={isLoading}
-                                />
-                            )}
-                             <button type="submit" disabled={isLoading || (!prompt && mode !== 'edit')} className="w-full flex items-center justify-center gap-2 py-2.5 px-3 bg-blue-600 rounded-md text-white font-semibold hover:bg-blue-500 transition-colors disabled:bg-zinc-700 disabled:cursor-not-allowed">
-                                 {isLoading ? <Icons.Spinner /> : <Icons.Sparkles className="!text-lg" />}
-                                 <span>Gerar</span>
-                             </button>
-                        </form>
-                         {error && <div className="mt-2 p-2 bg-red-900/50 border border-red-800 text-red-300 text-xs rounded-md flex items-start gap-2"><Icons.AlertCircle className="shrink-0 mt-0.5 !text-base" /><span>{error}</span><button onClick={() => setError(null)} className="ml-auto p-0.5 text-red-300 hover:text-white"><Icons.Close className="!text-base" /></button></div>}
-                    </PanelSection>
-                    
                     <PanelSection title="Configurações" icon={<Icons.Settings />} defaultOpen={mode !== 'edit'}>
-                         {mode === 'create' && (
+                        {mode === 'create' && (
                             <div className="space-y-3">
-                                {styleOptions[activeCreateFunction].length > 0 && (<div className="custom-select-wrapper"> <select value={styleModifier} onChange={(e) => setStyleModifier(e.target.value)} className="custom-select" aria-label="Estilo"><option value="default" disabled>Selecione um Estilo</option>{styleOptions[activeCreateFunction].map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></div>)}
-                                <div className="custom-select-wrapper"><select value={aspectRatio} onChange={(e) => setAspectRatio(e.target.value)} className="custom-select" aria-label="Proporção">{ALL_SUPPORTED_ASPECT_RATIOS.map((group) => (<optgroup label={group.label} key={group.label}>{group.options.map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}</optgroup>))}</select></div>
-                                {activeCreateFunction === 'comic' && (<div className="flex items-center gap-1 bg-zinc-800 p-1 rounded-md"><button onClick={() => setComicColorPalette('vibrant')} className={`w-1/2 text-center text-xs font-semibold py-1 rounded ${comicColorPalette === 'vibrant' ? 'bg-zinc-600' : ''}`}>Vibrante</button><button onClick={() => setComicColorPalette('noir')} className={`w-1/2 text-center text-xs font-semibold py-1 rounded ${comicColorPalette === 'noir' ? 'bg-zinc-600' : ''}`}>Noir</button></div>)}
-                                {(activeCreateFunction === 'free' || activeCreateFunction === 'comic') && (<><div className="custom-select-wrapper"><label className="block text-xs font-medium text-zinc-400 mb-1">Ângulo da Câmera</label><select value={cameraAngle} onChange={(e) => setCameraAngle(e.target.value)} className="custom-select">{cameraAngleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></div><div className="custom-select-wrapper"><label className="block text-xs font-medium text-zinc-400 mb-1">Iluminação</label><select value={lightingStyle} onChange={(e) => setLightingStyle(e.target.value)} className="custom-select">{lightingStyleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></div></>)}
+                                {styleOptions[activeCreateFunction].length > 0 && (
+                                    <div className="custom-select-wrapper">
+                                        <select value={styleModifier} onChange={(e) => setStyleModifier(e.target.value)} className="custom-select" aria-label="Estilo">
+                                            <option value="default" disabled>Selecione um Estilo</option>
+                                            {styleOptions[activeCreateFunction].map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                        </select>
+                                    </div>
+                                )}
+                                <div>
+                                    <label className="block text-xs font-medium text-zinc-400 mb-1">Proporção</label>
+                                    <div className="custom-select-wrapper">
+                                        <select value={aspectRatio} onChange={(e) => setAspectRatio(e.target.value)} className="custom-select" aria-label="Proporção">
+                                            {ALL_SUPPORTED_ASPECT_RATIOS.map((group) => (
+                                                <optgroup label={group.label} key={group.label}>
+                                                    {group.options.map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}
+                                                </optgroup>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                                {activeCreateFunction === 'comic' && (
+                                    <div className="flex items-center gap-1 bg-zinc-800 p-1 rounded-md">
+                                        <button onClick={() => setComicColorPalette('vibrant')} className={`w-1/2 text-center text-xs font-semibold py-1 rounded ${comicColorPalette === 'vibrant' ? 'bg-zinc-600' : ''}`}>Vibrante</button>
+                                        <button onClick={() => setComicColorPalette('noir')} className={`w-1/2 text-center text-xs font-semibold py-1 rounded ${comicColorPalette === 'noir' ? 'bg-zinc-600' : ''}`}>Noir</button>
+                                    </div>
+                                )}
+                                {(activeCreateFunction === 'free' || activeCreateFunction === 'comic') && (
+                                    <>
+                                        <div>
+                                            <label className="block text-xs font-medium text-zinc-400 mb-1">Ângulo da Câmera</label>
+                                            <div className="custom-select-wrapper">
+                                                <select value={cameraAngle} onChange={(e) => setCameraAngle(e.target.value)} className="custom-select">
+                                                    {cameraAngleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-medium text-zinc-400 mb-1">Iluminação</label>
+                                            <div className="custom-select-wrapper">
+                                                <select value={lightingStyle} onChange={(e) => setLightingStyle(e.target.value)} className="custom-select">
+                                                    {lightingStyleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
                             </div>
                         )}
                         {mode === 'edit' && activeEditFunction === 'style' && (
@@ -1413,6 +1433,29 @@ export default function App() {
                              </div>
                          </PanelSection>
                      )}
+                </div>
+                <div className="shrink-0 border-t border-zinc-800">
+                    <PanelSection title="Prompt" icon={<Icons.Prompt />} className="!border-b-0">
+                         <form onSubmit={handleSubmit} className="space-y-3">
+                            <textarea
+                                ref={textareaRef} value={prompt} onChange={(e) => setPrompt(e.target.value)}
+                                placeholder={ mode === 'create' ? "Um astronauta surfando em um anel de saturno..." : mode === 'edit' ? "Adicione um chapéu de cowboy na pessoa..." : "Um close-up de uma gota de chuva..." }
+                                rows={3} className="w-full bg-zinc-800 rounded-md p-2 text-sm text-zinc-300 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none transition-shadow" disabled={isLoading}
+                            />
+                             {(mode === 'create' || mode === 'edit') && (
+                                <textarea
+                                    ref={negativeTextareaRef} value={negativePrompt} onChange={(e) => setNegativePrompt(e.target.value)}
+                                    placeholder="Prompt Negativo: evite baixa qualidade, texto..."
+                                    rows={2} className="w-full bg-zinc-800 rounded-md p-2 text-sm text-zinc-300 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none transition-shadow" disabled={isLoading}
+                                />
+                            )}
+                             <button type="submit" disabled={isLoading || (!prompt && mode !== 'edit')} className="w-full flex items-center justify-center gap-2 py-2.5 px-3 bg-blue-600 rounded-md text-white font-semibold hover:bg-blue-500 transition-colors disabled:bg-zinc-700 disabled:cursor-not-allowed">
+                                 {isLoading ? <Icons.Spinner /> : <Icons.Sparkles className="!text-lg" />}
+                                 <span>Gerar</span>
+                             </button>
+                        </form>
+                         {error && <div className="mt-2 p-2 bg-red-900/50 border border-red-800 text-red-300 text-xs rounded-md flex items-start gap-2"><Icons.AlertCircle className="shrink-0 mt-0.5 !text-base" /><span>{error}</span><button onClick={() => setError(null)} className="ml-auto p-0.5 text-red-300 hover:text-white"><Icons.Close className="!text-base" /></button></div>}
+                    </PanelSection>
                 </div>
             </aside>
         </>
