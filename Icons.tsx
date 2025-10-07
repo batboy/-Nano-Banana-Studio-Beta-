@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 // Base component for all icons
@@ -29,9 +28,6 @@ export const History = (props: React.HTMLAttributes<HTMLSpanElement>) => <Materi
 export const Brush = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="brush" {...props} />;
 export const Eraser = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="ink_eraser" {...props} />;
 export const Deselect = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="layers_clear" {...props} />;
-export const ZoomOut = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="zoom_out" {...props} />;
-export const ZoomIn = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="zoom_in" {...props} />;
-export const FitScreen = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="fit_screen" {...props} />;
 export const CheckCircle = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="check_circle" {...props} />;
 export const AlertCircle = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="error" {...props} />;
 export const UploadCloud = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="cloud_upload" {...props} />;

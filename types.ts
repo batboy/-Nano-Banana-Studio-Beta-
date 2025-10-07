@@ -43,6 +43,9 @@ export interface HistoryEntry {
   createFunction?: CreateFunction;
   aspectRatio?: string;
   comicColorPalette?: 'vibrant' | 'noir';
+  styleModifier?: string;
+  cameraAngle?: string;
+  lightingStyle?: string;
   
   // Edit mode state
   editFunction?: EditFunction;
