@@ -16,7 +16,7 @@ export const Redo = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialI
 export const Sparkles = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="auto_awesome" {...props} />;
 export const Image = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="image" {...props} />;
 export const Sticker = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="sticky_note_2" {...props} />;
-export const Type = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="type_specimen" {...props} />;
+export const Type = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="title" {...props} />;
 export const Comic = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="comic_bubble" {...props} />;
 export const AspectRatio = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="aspect_ratio" {...props} />;
 export const Sliders = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="tune" {...props} />;
@@ -35,6 +35,7 @@ export const Select = (props: React.HTMLAttributes<HTMLSpanElement>) => <Materia
 export const Selection = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="highlight_alt" {...props} />;
 export const ClearAll = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="delete_sweep" {...props} />;
 export const Settings = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="settings" {...props} />;
+export const Properties = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="tune" {...props} />;
 export const Block = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="block" {...props} />;
 export const Close = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="close" {...props} />;
 export const Send = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="send" {...props} />;
@@ -47,6 +48,10 @@ export const AddPhoto = (props: React.HTMLAttributes<HTMLSpanElement>) => <Mater
 export const Check = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="check" {...props} />;
 export const RotateRight = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="rotate_right" {...props} />;
 export const Filter = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="photo_filter" {...props} />;
+export const Add = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="add" {...props} />;
+export const ZoomIn = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="zoom_in" {...props} />;
+export const ZoomOut = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="zoom_out" {...props} />;
+export const FitScreen = (props: React.HTMLAttributes<HTMLSpanElement>) => <MaterialIcon iconName="fit_screen" {...props} />;
 
 
 export const Spinner = ({ className, ...props }: React.HTMLAttributes<SVGSVGElement>) => (

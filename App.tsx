@@ -26,7 +26,7 @@ const Slider: React.FC<{
 
     return (
         <div className="flex items-center gap-2">
-            {label && <span className="text-sm text-zinc-300 whitespace-nowrap">{label}</span>}
+            {label && <label className="text-xs text-zinc-400 whitespace-nowrap">{label}</label>}
             <input
                 ref={inputRef}
                 type="range"
@@ -42,45 +42,45 @@ const Slider: React.FC<{
     );
 };
 
-const FunctionButton: React.FC<{
+const ToolbarButton: React.FC<{
   'data-function': string;
   isActive: boolean;
   onClick: (func: any) => void;
   icon: React.ReactNode;
   name: string;
-  size?: 'small' | 'large';
-}> = ({ 'data-function': dataFunction, isActive, onClick, icon, name, size = 'small' }) => (
+}> = ({ 'data-function': dataFunction, isActive, onClick, icon, name }) => (
   <button
     data-function={dataFunction}
     onClick={() => onClick(dataFunction)}
-    className={`flex flex-col items-center justify-center p-2 border border-transparent rounded-lg cursor-pointer transition-colors duration-200 w-full text-center
-      ${size === 'large' ? 'h-16' : 'h-14'}
-      ${isActive ? 'bg-zinc-700 text-zinc-100' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400'
+    title={name}
+    className={`relative flex items-center justify-center p-3 rounded-lg cursor-pointer transition-colors duration-200 w-full aspect-square group
+      ${isActive ? 'bg-zinc-700 text-zinc-100' : 'hover:bg-zinc-800 text-zinc-400'
     }`}
   >
-    <div className="mb-1">{icon}</div>
-    <div className={`font-semibold ${size === 'large' ? 'text-sm' : 'text-xs'}`}>{name}</div>
+    {icon}
+    {isActive && <div className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-1 bg-blue-500 rounded-r-full"></div>}
   </button>
 );
+
 
 const PanelSection: React.FC<{ title: string; icon: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean }> = ({ title, icon, children, defaultOpen = true }) => {
     const [isOpen, setIsOpen] = useState(defaultOpen);
 
     return (
-        <div>
+        <div className="border-b border-zinc-800">
             <button
                 onClick={() => setIsOpen(!isOpen)}
-                className="w-full flex items-center justify-between p-3 text-sm font-medium text-zinc-300 hover:bg-zinc-800/50"
+                className="w-full flex items-center justify-between p-2 text-xs font-bold text-zinc-300 hover:bg-zinc-800/50"
                 aria-expanded={isOpen}
                 title={`Expandir/recolher ${title}`}
             >
                 <div className="flex items-center gap-2">
                     {icon}
-                    <span>{title}</span>
+                    <span className="uppercase tracking-wider">{title}</span>
                 </div>
-                <Icons.ChevronDown className={`transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+                <Icons.ChevronDown className={`transition-transform duration-200 text-base ${isOpen ? 'rotate-180' : ''}`} />
             </button>
-            {isOpen && <div className="px-3 pb-4 space-y-4">{children}</div>}
+            {isOpen && <div className="p-3 space-y-3">{children}</div>}
         </div>
     );
 };
@@ -91,6 +91,7 @@ interface ImageEditorProps {
   activeEditFunction: EditFunction | null;
   detectedObjects: DetectedObject[];
   highlightedObject: DetectedObject | null;
+  zoom: number;
 }
 
 interface ImageEditorRef {
@@ -103,13 +104,14 @@ interface ImageEditorRef {
   stampObjectOnMask: (data: { previewUrl: string, placerTransform: any, maskOpacity: number }) => void;
 }
 
-const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeEditFunction, detectedObjects, highlightedObject }, ref) => {
+const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeEditFunction, detectedObjects, highlightedObject, zoom }, ref) => {
     const imageCanvasRef = useRef<HTMLCanvasElement>(null);
     const maskCanvasRef = useRef<HTMLCanvasElement>(null);
     const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const originalImageSizeRef = useRef<{ width: number, height: number }>({ width: 0, height: 0 });
     const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
+    const panRef = useRef({ isPanning: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 });
 
     const clearOverlays = useCallback(() => {
         const canvas = overlayCanvasRef.current;
@@ -175,26 +177,38 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
 
             // Box
             ctx.strokeStyle = isHighlighted ? '#facc15' : '#3b82f6';
-            ctx.lineWidth = isHighlighted ? 4 : 2;
+            ctx.lineWidth = isHighlighted ? 3 : 1.5;
             ctx.strokeRect(x, y, w, h);
 
             // Label
             const label = obj.name;
-            ctx.font = 'bold 16px Inter, sans-serif';
+            ctx.font = 'bold 14px Inter, sans-serif';
             const textMetrics = ctx.measureText(label);
             const textWidth = textMetrics.width;
-            const textHeight = 16;
+            const textHeight = 14;
             const padding = 4;
 
             ctx.fillStyle = isHighlighted ? '#facc15' : '#3b82f6';
             ctx.fillRect(x, y - (textHeight + padding), textWidth + padding * 2, textHeight + padding);
             
             ctx.fillStyle = '#18181b';
-            ctx.fillText(label, x + padding, y - (padding / 2));
+            ctx.fillText(label, x + padding, y - (padding / 2) + 1);
         });
 
     }, [detectedObjects, highlightedObject]);
     
+    useEffect(() => {
+        const container = containerRef.current;
+        if (container) {
+            const canPan = container.scrollWidth > container.clientWidth || container.scrollHeight > container.clientHeight;
+            if (canPan) {
+                container.style.cursor = 'grab';
+            } else {
+                container.style.cursor = 'default';
+            }
+        }
+    }, [imageDimensions, zoom]);
+
     useImperativeHandle(ref, () => {
         const getMaskAsCanvas = () => {
             const maskCanvas = maskCanvasRef.current;
@@ -264,10 +278,13 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
                 
                 const { placerTransform } = data;
                 
-                const canvasX = placerTransform.x + container.scrollLeft;
-                const canvasY = placerTransform.y + container.scrollTop;
-                const canvasWidth = placerTransform.width;
-                const canvasHeight = placerTransform.height;
+                const leftOffset = Math.max(0, (container.clientWidth - imageDimensions.width * zoom) / 2);
+                const topOffset = Math.max(0, (container.clientHeight - imageDimensions.height * zoom) / 2);
+
+                const canvasX = (container.scrollLeft + placerTransform.x - leftOffset) / zoom;
+                const canvasY = (container.scrollTop + placerTransform.y - topOffset) / zoom;
+                const canvasWidth = placerTransform.width / zoom;
+                const canvasHeight = placerTransform.height / zoom;
                 
                 const img = new Image();
                 img.crossOrigin = "anonymous";
@@ -302,27 +319,74 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
             },
         };
     });
+    
+    const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+        const container = containerRef.current;
+        if (!container || (container.scrollWidth <= container.clientWidth && container.scrollHeight <= container.clientHeight)) {
+            return;
+        }
+        e.preventDefault();
+        panRef.current = {
+            isPanning: true,
+            startX: e.pageX - container.offsetLeft,
+            startY: e.pageY - container.offsetTop,
+            scrollLeft: container.scrollLeft,
+            scrollTop: container.scrollTop,
+        };
+        container.style.cursor = 'grabbing';
+    };
+
+    const handleMouseUp = () => {
+         const container = containerRef.current;
+         if(container) {
+            panRef.current.isPanning = false;
+            if (container.scrollWidth > container.clientWidth || container.scrollHeight > container.clientHeight) {
+                 container.style.cursor = 'grab';
+            } else {
+                 container.style.cursor = 'default';
+            }
+         }
+    };
+    
+    const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+        if (!panRef.current.isPanning) return;
+        const container = containerRef.current;
+        if (!container) return;
+
+        e.preventDefault();
+        const x = e.pageX - container.offsetLeft;
+        const y = e.pageY - container.offsetTop;
+        const walkX = (x - panRef.current.startX);
+        const walkY = (y - panRef.current.startY);
+        container.scrollLeft = panRef.current.scrollLeft - walkX;
+        container.scrollTop = panRef.current.scrollTop - walkY;
+    };
+
 
     return (
         <div ref={containerRef} 
-             className="w-full h-full overflow-auto flex items-center justify-center bg-zinc-900/50 rounded-lg p-4"
+             className="w-full h-full overflow-auto flex items-center justify-center bg-zinc-900/50 rounded-lg"
+             onMouseDown={handleMouseDown}
+             onMouseUp={handleMouseUp}
+             onMouseLeave={handleMouseUp}
+             onMouseMove={handleMouseMove}
         >
             <div 
                 className="relative shrink-0"
                 style={{
-                    width: imageDimensions.width,
-                    height: imageDimensions.height
+                    width: imageDimensions.width * zoom,
+                    height: imageDimensions.height * zoom
                 }}
             >
-                <canvas ref={imageCanvasRef} className="absolute top-0 left-0" />
+                <canvas ref={imageCanvasRef} className="absolute top-0 left-0 w-full h-full" />
                 <canvas
                     ref={maskCanvasRef}
-                    className="absolute top-0 left-0 transition-opacity duration-200"
+                    className="absolute top-0 left-0 transition-opacity duration-200 w-full h-full"
                     style={{ opacity: activeEditFunction === 'compose' ? 0.6 : 0 }}
                 />
                 <canvas
                     ref={overlayCanvasRef}
-                    className="absolute top-0 left-0 pointer-events-none"
+                    className="absolute top-0 left-0 pointer-events-none w-full h-full"
                 />
             </div>
         </div>
@@ -366,14 +430,15 @@ const ImageUploadSlot: React.FC<{
     imagePreviewUrl: string | null;
     onUpload: (file: File) => void;
     onRemove: () => void;
-}> = ({ id, label, icon, imagePreviewUrl, onUpload, onRemove }) => {
+    className?: string;
+}> = ({ id, label, icon, imagePreviewUrl, onUpload, onRemove, className = '' }) => {
     const [isDragging, setIsDragging] = useState(false);
     const dragCounter = useRef(0);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
             onUpload(e.target.files[0]);
-            e.target.value = ''; // Reset input to allow re-uploading the same file
+            e.target.value = '';
         }
     };
 
@@ -405,7 +470,7 @@ const ImageUploadSlot: React.FC<{
 
     if (imagePreviewUrl) {
         return (
-            <div className="relative group w-full h-full bg-zinc-800 rounded-md overflow-hidden">
+            <div className={`relative group w-full h-full bg-zinc-800 rounded-md overflow-hidden ${className}`}>
                 <img src={imagePreviewUrl} alt={label} className="w-full h-full object-contain" />
                 <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                     <button onClick={onRemove} className="p-2 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700 transition-colors" title="Remover Imagem">
@@ -422,66 +487,38 @@ const ImageUploadSlot: React.FC<{
             onDragLeave={handleDragLeave}
             onDragOver={(e) => e.preventDefault()}
             onDrop={handleDrop}
-            className={`w-full h-full border-2 rounded-md transition-all duration-200 ${isDragging ? 'border-blue-500 bg-blue-500/10 border-solid' : 'border-zinc-800 border-dashed'}`}
+            className={`w-full h-full border-2 rounded-md transition-all duration-200 ${className} ${isDragging ? 'border-blue-500 bg-blue-500/10 border-solid' : 'border-zinc-800 border-dashed'}`}
         >
             <input type="file" id={id} className="hidden" accept="image/png, image/jpeg, image/webp" onChange={handleFileChange} />
             <label htmlFor={id} className="cursor-pointer flex flex-col items-center justify-center h-full text-center p-2 text-zinc-500 hover:text-zinc-400">
                 {icon}
                 <span className="text-xs font-semibold mt-1">{label}</span>
-                <span className="text-xs mt-1">Arraste ou clique para enviar</span>
+                <span className="text-xs mt-1">Arraste ou clique</span>
             </label>
         </div>
     );
 };
 
-// Helper function to get image dimensions from a URL
 const getImageDimensions = (url: string): Promise<{ width: number; height: number }> => {
     return new Promise((resolve, reject) => {
         const img = new Image();
-        img.onload = () => {
-            resolve({ width: img.width, height: img.height });
-        };
-        img.onerror = (err) => {
-            reject(err);
-        };
+        img.onload = () => resolve({ width: img.width, height: img.height });
+        img.onerror = (err) => reject(err);
         img.src = url;
     });
 };
 
-// Helper function to calculate aspect ratio string and match common ratios
 const getAspectRatioString = (width: number, height: number): string => {
     const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
     const commonDivisor = gcd(width, height);
-    const w = width / commonDivisor;
-    const h = height / commonDivisor;
-
-    const commonRatios: { [key: string]: number } = {
-        '1:1': 1,
-        '16:9': 16/9,
-        '9:16': 9/16,
-        '4:3': 4/3,
-        '3:4': 3/4,
-    };
-
-    const numericRatio = w / h;
-    for (const key in commonRatios) {
-        if (Math.abs(numericRatio - commonRatios[key]) < 0.02) {
-            return key;
-        }
-    }
-    
-    return `${w}:${h}`; // Fallback to exact ratio
+    return `${width / commonDivisor}:${height / commonDivisor}`;
 };
 
-// Re-organize aspect ratios by category for better user experience in the dropdown.
 const ALL_SUPPORTED_ASPECT_RATIOS = [
     { label: 'Quadrado', options: ['1:1'] },
     { label: 'Paisagem (Horizontal)', options: ['16:9', '4:3'] },
     { label: 'Retrato (Vertical)', options: ['9:16', '3:4'] },
 ];
-
-// Flattened list for components that don't use groups.
-const ASPECT_RATIOS = ALL_SUPPORTED_ASPECT_RATIOS.flatMap(group => group.options);
 
 const FILTERS = [
     { name: 'Noir', prompt: "Aplique um filtro noir preto e branco de alto contraste e dramático à imagem, com sombras profundas e realces brilhantes." },
@@ -490,19 +527,32 @@ const FILTERS = [
     { name: 'Sonhador', prompt: "Aplique um efeito etéreo e sonhador à imagem com foco suave, um brilho delicado e cores pastel ligeiramente dessaturadas." },
     { name: 'Cyberpunk', prompt: "Transforme a imagem com uma estética cyberpunk, apresentando azuis, rosas e roxos neon na iluminação, alto contraste e uma sensação futurista e urbana." },
     { name: 'Aquarela', prompt: "Converta a imagem para que pareça uma pintura em aquarela, com bordas suaves, cores mescladas e uma aparência de papel texturizado." },
-    { name: 'Ilustração', prompt: "Transforme a imagem em uma ilustração digital, com contornos definidos, sombreamento estilizado e uma paleta de cores rica." },
-    { name: 'Anime', prompt: "Converta a imagem para o estilo de anime japonês, com traços característicos, olhos grandes e expressivos, cabelos estilizados e cores vibrantes com sombreamento cel shading." },
-    { name: '3D', prompt: "Renderize a imagem em um estilo de arte 3D, como se fosse de uma animação CGI, com superfícies suaves, iluminação realista e profundidade." },
 ];
 
+const CREATE_FUNCTIONS: { id: CreateFunction, name: string, icon: React.ReactNode }[] = [
+    { id: 'free', name: 'Livre', icon: <Icons.Image /> },
+    { id: 'sticker', name: 'Sticker', icon: <Icons.Sticker /> },
+    { id: 'text', name: 'Texto / Logo', icon: <Icons.Type /> },
+    { id: 'comic', name: 'HQ', icon: <Icons.Comic /> },
+];
+
+const EDIT_FUNCTIONS: { id: EditFunction, name: string, icon: React.ReactNode }[] = [
+    { id: 'compose', name: 'Compor', icon: <Icons.Layers /> },
+    { id: 'style', name: 'Estilizar', icon: <Icons.Palette /> },
+];
+
+const VIDEO_FUNCTIONS: { id: VideoFunction, name: string, icon: React.ReactNode }[] = [
+    { id: 'prompt', name: 'A Partir de Prompt', icon: <Icons.Prompt /> },
+    { id: 'animation', name: 'Animar Imagem', icon: <Icons.Start /> },
+];
+
+
 export default function App() {
-    // Main state
     const [prompt, setPrompt] = useState<string>('');
     const [mode, setMode] = useState<Mode>('create');
     const [history, setHistory] = useState<HistoryEntry[]>([]);
     const [historyIndex, setHistoryIndex] = useState<number>(-1);
     
-    // Create mode state
     const [activeCreateFunction, setActiveCreateFunction] = useState<CreateFunction>('free');
     const [aspectRatio, setAspectRatio] = useState<string>('1:1');
     const [negativePrompt, setNegativePrompt] = useState<string>('');
@@ -511,24 +561,18 @@ export default function App() {
     const [lightingStyle, setLightingStyle] = useState<string>('default');
     const [comicColorPalette, setComicColorPalette] = useState<'vibrant' | 'noir'>('vibrant');
 
-
-    // Edit mode state
     const [activeEditFunction, setActiveEditFunction] = useState<EditFunction>('compose');
     const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
     const [styleStrength, setStyleStrength] = useState<number>(100);
     const [detectedObjects, setDetectedObjects] = useState<DetectedObject[]>([]);
     const [highlightedObject, setHighlightedObject] = useState<DetectedObject | null>(null);
-    const [currentImageAspectRatio, setCurrentImageAspectRatio] = useState<string | null>(null);
+    const [currentImageDimensions, setCurrentImageDimensions] = useState<{w: number, h: number} | null>(null);
     const [placingImageIndex, setPlacingImageIndex] = useState<number | null>(null);
-
     
-    // Video mode state
     const [activeVideoFunction, setActiveVideoFunction] = useState<VideoFunction>('prompt');
     const [startFrame, setStartFrame] = useState<UploadedImage | null>(null);
     const [startFramePreview, setStartFramePreview] = useState<string | null>(null);
 
-
-    // UI & Loading state
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [loadingMessage, setLoadingMessage] = useState<string>('Gerando sua mídia...');
     const [isAnalyzingStyle, setIsAnalyzingStyle] = useState<boolean>(false);
@@ -536,13 +580,11 @@ export default function App() {
     const [error, setError] = useState<string | null>(null);
     const [showMobileModal, setShowMobileModal] = useState<boolean>(false);
     const [isDragging, setIsDragging] = useState<boolean>(false);
-    const [dragTarget, setDragTarget] = useState<'main' | 'reference' | null>(null);
     const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([]);
-    
-    // Dialogs & Modals state
     const [confirmationDialog, setConfirmationDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+    const [zoom, setZoom] = useState(1);
+    const [isFitToScreen, setIsFitToScreen] = useState(true);
         
-    // Refs
     const editorRef = useRef<ImageEditorRef>(null);
     const mainContentRef = useRef<HTMLDivElement>(null);
     const placerContainerRef = useRef<HTMLDivElement>(null);
@@ -703,7 +745,6 @@ export default function App() {
                     onMouseDown={(e) => handleMouseDown(e, 'move')}
                 >
                     <img src={src} className="w-full h-full object-contain" alt="Object to place" draggable="false" />
-                    {/* Handlers */}
                     <div onMouseDown={(e) => handleMouseDown(e, 'scale')} className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-white rounded-full cursor-nwse-resize border-2 border-blue-500"></div>
                     <div onMouseDown={(e) => handleMouseDown(e, 'scale')} className="absolute -bottom-1.5 -right-1.5 w-4 h-4 bg-white rounded-full cursor-nesw-resize border-2 border-blue-500"></div>
                     <div onMouseDown={(e) => handleMouseDown(e, 'scale')} className="absolute -bottom-1.5 -left-1.5 w-4 h-4 bg-white rounded-full cursor-nwse-resize border-2 border-blue-500"></div>
@@ -715,13 +756,12 @@ export default function App() {
                        <Icons.RotateRight className="text-blue-600 !text-base" />
                     </div>
                 </div>
-                 {/* Toolbar */}
                 <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-zinc-900/80 backdrop-blur-sm p-2 rounded-lg shadow-lg flex items-center gap-2 ring-1 ring-white/10 pointer-events-auto">
-                    <button onClick={onCancel} className="px-3 py-2 text-sm font-semibold rounded-md bg-zinc-800 hover:bg-zinc-700 transition-colors flex items-center gap-2">
-                        <Icons.Close /> Cancelar
+                    <button onClick={onCancel} className="px-3 py-1.5 text-sm font-semibold rounded-md bg-zinc-800 hover:bg-zinc-700 transition-colors flex items-center gap-1.5">
+                        <Icons.Close className="!text-base" /> Cancelar
                     </button>
-                    <button onClick={() => onConfirm(transform)} className="px-3 py-2 text-sm font-semibold rounded-md bg-blue-600 hover:bg-blue-500 text-white transition-colors flex items-center gap-2">
-                        <Icons.Check /> Aplicar
+                    <button onClick={() => onConfirm(transform)} className="px-3 py-1.5 text-sm font-semibold rounded-md bg-blue-600 hover:bg-blue-500 text-white transition-colors flex items-center gap-1.5">
+                        <Icons.Check className="!text-base" /> Aplicar
                     </button>
                 </div>
             </div>
@@ -730,68 +770,68 @@ export default function App() {
 
     const styleOptions: Record<CreateFunction, { value: string, label: string }[]> = {
         free: [],
-        sticker: [
-            { value: 'cartoon', label: 'Desenho' },
-            { value: 'vintage', label: 'Vintage' },
-            { value: 'holographic', label: 'Holográfico' },
-            { value: 'embroidered patch', label: 'Bordado' },
-        ],
-        text: [
-            { value: 'minimalist', label: 'Minimalista' },
-            { value: 'corporate', label: 'Corporativo' },
-            { value: 'playful', label: 'Divertido' },
-            { value: 'geometric', label: 'Geométrico' },
-        ],
-        comic: [
-            { value: 'American comic book', label: 'Americano' },
-            { value: 'Japanese manga', label: 'Mangá' },
-            { value: 'franco-belgian comics (bande dessinée)', label: 'Franco-Belga' },
-        ],
+        sticker: [ { value: 'cartoon', label: 'Desenho' }, { value: 'vintage', label: 'Vintage' }, { value: 'holographic', label: 'Holográfico' }, { value: 'embroidered patch', label: 'Bordado' }, ],
+        text: [ { value: 'minimalist', label: 'Minimalista' }, { value: 'corporate', label: 'Corporativo' }, { value: 'playful', label: 'Divertido' }, { value: 'geometric', label: 'Geométrico' }, ],
+        comic: [ { value: 'American comic book', label: 'Americano' }, { value: 'Japanese manga', label: 'Mangá' }, { value: 'franco-belgian comics (bande dessinée)', label: 'Franco-Belga' }, ],
     };
-
-    const cameraAngleOptions = [
-        { value: 'default', label: 'Padrão' },
-        { value: 'eye-level', label: 'Nível do Olhar' },
-        { value: 'close-up', label: 'Close-up' },
-        { value: 'low angle', label: 'Ângulo Baixo' },
-        { value: 'high angle (bird\'s-eye view)', label: 'Plano Alto' },
-        { value: 'wide shot (long shot)', label: 'Plano Geral' },
-    ];
+    const cameraAngleOptions = [ { value: 'default', label: 'Padrão' }, { value: 'eye-level', label: 'Nível do Olhar' }, { value: 'close-up', label: 'Close-up' }, { value: 'low angle', label: 'Ângulo Baixo' }, { value: 'high angle (bird\'s-eye view)', label: 'Plano Alto' }, { value: 'wide shot (long shot)', label: 'Plano Geral' }, ];
+    const lightingStyleOptions = [ { value: 'default', label: 'Padrão' }, { value: 'cinematic', label: 'Cinemática' }, { value: 'soft', label: 'Luz Suave' }, { value: 'dramatic', label: 'Dramática' }, { value: 'studio', label: 'Estúdio' }, { value: 'natural', label: 'Natural' }, ];
     
-    const lightingStyleOptions = [
-        { value: 'default', label: 'Padrão' },
-        { value: 'cinematic', label: 'Cinemática' },
-        { value: 'soft', label: 'Luz Suave' },
-        { value: 'dramatic', label: 'Dramática' },
-        { value: 'studio', label: 'Estúdio' },
-        { value: 'natural', label: 'Natural' },
-    ];
+    const closeConfirmationDialog = () => setConfirmationDialog(prev => ({ ...prev, isOpen: false }));
+    const handleConfirm = () => { confirmationDialog.onConfirm(); closeConfirmationDialog(); };
+    const resetDetectionState = useCallback(() => { setDetectedObjects([]); setHighlightedObject(null); editorRef.current?.clearOverlays(); }, []);
+
+    const fitZoomToScreen = useCallback(() => {
+        if (!mainContentRef.current || !currentImageDimensions) return;
+        const PADDING = 32;
+        const container = mainContentRef.current;
+        const containerWidth = container.clientWidth - PADDING;
+        const containerHeight = container.clientHeight - PADDING;
+        const { w: imageWidth, h: imageHeight } = currentImageDimensions;
+        if (containerWidth <= 0 || containerHeight <= 0 || imageWidth <= 0 || imageHeight <= 0) {
+            setZoom(1); return;
+        }
+        const scaleX = containerWidth / imageWidth;
+        const scaleY = containerHeight / imageHeight;
+        const newZoom = Math.min(scaleX, scaleY);
+        setZoom(prevZoom => Math.abs(prevZoom - newZoom) > 0.001 ? newZoom : prevZoom);
+    }, [currentImageDimensions]);
+
+    useEffect(() => {
+        if (isFitToScreen || !generatedImage) {
+            fitZoomToScreen();
+        }
+    }, [isFitToScreen, generatedImage, fitZoomToScreen]);
+
+    useEffect(() => {
+        const container = mainContentRef.current;
+        if (!container) return;
+        const resizeObserver = new ResizeObserver(() => {
+            if (isFitToScreen) {
+                fitZoomToScreen();
+            }
+        });
+        resizeObserver.observe(container);
+        return () => resizeObserver.disconnect();
+    }, [isFitToScreen, fitZoomToScreen]);
+
+    const handleZoom = (factor: number) => {
+        setIsFitToScreen(false);
+        setZoom(prev => Math.max(0.1, Math.min(prev * factor, 5)));
+    };
     
-    const closeConfirmationDialog = () => {
-        setConfirmationDialog(prev => ({ ...prev, isOpen: false }));
-    };
-
-    const handleConfirm = () => {
-        confirmationDialog.onConfirm();
-        closeConfirmationDialog();
-    };
-
-    const resetDetectionState = useCallback(() => {
-        setDetectedObjects([]);
-        setHighlightedObject(null);
-        editorRef.current?.clearOverlays();
-    }, []);
+    const handleFitToScreen = () => setIsFitToScreen(true);
 
     useEffect(() => {
         if (generatedImage) {
             getImageDimensions(generatedImage).then(({ width, height }) => {
-                setCurrentImageAspectRatio(getAspectRatioString(width, height));
+                setCurrentImageDimensions({ w: width, h: height });
             }).catch(err => {
                 console.error("Could not get image dimensions:", err);
-                setCurrentImageAspectRatio(null);
+                setCurrentImageDimensions(null);
             });
         } else {
-            setCurrentImageAspectRatio(null);
+            setCurrentImageDimensions(null);
         }
     }, [generatedImage]);
 
@@ -804,31 +844,27 @@ export default function App() {
 
     const isEditStateDirty = useCallback(() => {
         if (mode !== 'edit' || !generatedImage) return false;
-        
         const hasMask = editorRef.current?.hasMaskData() ?? false;
         const hasPrompt = prompt.trim() !== '';
         const hasRefImages = referenceImages.length > 0;
-    
         return hasMask || hasPrompt || hasRefImages;
     }, [mode, generatedImage, prompt, referenceImages]);
 
-
     const handleModeToggle = (newMode: Mode) => {
         if (newMode === mode) return;
-    
         const latestImage = history[historyIndex]?.imageUrl;
-    
-        const performHardSwitch = () => {
-            setMode(newMode);
-            resetImages();
-            setHistory([]);
-            setHistoryIndex(-1);
-            setPrompt('');
-            setNegativePrompt('');
+        const performSwitch = (targetMode: Mode) => {
+            setMode(targetMode);
+            resetImages(); setHistory([]); setHistoryIndex(-1); setPrompt(''); setNegativePrompt('');
+            switch (targetMode) {
+                case 'create': setActiveCreateFunction('free'); break;
+                case 'edit': setActiveEditFunction('compose'); break;
+                case 'video': setActiveVideoFunction('prompt'); break;
+            }
         };
-    
         const performSwitchToEdit = () => {
             setMode('edit');
+            setActiveEditFunction('compose');
             resetImages();
             if (latestImage) {
                 const currentEntry = history[historyIndex];
@@ -837,84 +873,38 @@ export default function App() {
                 setPrompt(currentEntry.prompt);
                 setNegativePrompt(currentEntry.negativePrompt || '');
             } else {
-                setHistory([]);
-                setHistoryIndex(-1);
-                setPrompt('');
-                setNegativePrompt('');
+                setHistory([]); setHistoryIndex(-1); setPrompt(''); setNegativePrompt('');
             }
         };
-    
         const performSwitchToVideoWithAnimation = () => {
-            if (!latestImage) {
-                // If there's no image, fall back to a standard switch to video mode
-                setMode('video');
-                resetImages();
-                setHistory([]);
-                setHistoryIndex(-1);
-                setPrompt('');
-                setNegativePrompt('');
-                setActiveVideoFunction('prompt');
-                return;
-            }
-    
-            // If there IS an image, set up the animation state while preserving history
-            setMode('video');
-            resetImages(); // Clears ref images, but we set start frame next
-            setPrompt('');
-            setNegativePrompt('');
-            setActiveVideoFunction('animation');
-    
+            if (!latestImage) { performSwitch('video'); return; }
+            setMode('video'); resetImages(); setPrompt(''); setNegativePrompt(''); setActiveVideoFunction('animation');
             const base64 = latestImage.split(',')[1];
             const mimeType = latestImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
-            setStartFrame({ base64, mimeType });
-            setStartFramePreview(latestImage);
+            setStartFrame({ base64, mimeType }); setStartFramePreview(latestImage);
         };
-    
         if (mode === 'edit' && history.length > 0 && newMode !== 'edit') {
             const isContinuingToVideo = newMode === 'video';
-            
-            const onConfirmAction = isContinuingToVideo
-                ? performSwitchToVideoWithAnimation
-                : performHardSwitch;
-            
-            const dialogMessage = isContinuingToVideo
-                ? "Isso irá transferir sua imagem atual para o modo de vídeo para animação, preservando seu histórico. Deseja continuar?"
-                : "Ao sair do modo de edição, a imagem atual e seu histórico de edições serão perdidos. Deseja continuar?";
-            
-            const dialogTitle = isContinuingToVideo
-                ? 'Mudar para o Modo de Vídeo?'
-                : 'Sair do Modo de Edição?';
-
-            setConfirmationDialog({
-                isOpen: true,
-                title: dialogTitle,
-                message: dialogMessage,
-                onConfirm: onConfirmAction,
-            });
+            const onConfirmAction = isContinuingToVideo ? performSwitchToVideoWithAnimation : () => performSwitch(newMode);
+            const dialogMessage = isContinuingToVideo ? "Isso irá transferir sua imagem atual para o modo de vídeo para animação. Deseja continuar?" : "Ao sair do modo de edição, a imagem atual e seu histórico serão perdidos. Deseja continuar?";
+            const dialogTitle = isContinuingToVideo ? 'Mudar para o Modo de Vídeo?' : 'Sair do Modo de Edição?';
+            setConfirmationDialog({ isOpen: true, title: dialogTitle, message: dialogMessage, onConfirm: onConfirmAction });
             return;
         }
-    
-        if (newMode === 'edit') {
-            performSwitchToEdit();
-        } else if (newMode === 'video') {
-            performSwitchToVideoWithAnimation();
-        } else {
-            performHardSwitch();
-        }
+        if (newMode === 'edit') { performSwitchToEdit(); }
+        else if (newMode === 'video' && activeVideoFunction === 'animation') { performSwitchToVideoWithAnimation(); }
+        else { performSwitch(newMode); }
     };
     
     const handleHistoryNavigation = useCallback((index: number) => {
         if (index < 0 || index >= history.length) return;
-        
         const entry = history[index];
         if (!entry) return;
-
         resetDetectionState();
         setHistoryIndex(index);
         setPrompt(entry.prompt);
         setNegativePrompt(entry.negativePrompt || '');
         setMode(entry.mode);
-
         if (entry.mode === 'create') {
             setActiveCreateFunction(entry.createFunction!);
             setAspectRatio(entry.aspectRatio!);
@@ -926,9 +916,7 @@ export default function App() {
         } else if (entry.mode === 'edit') { 
             setActiveEditFunction(entry.editFunction!);
             setReferenceImages(entry.referenceImages || []);
-            if (entry.editFunction === 'style' && entry.styleStrength) {
-                setStyleStrength(entry.styleStrength);
-            }
+            if (entry.editFunction === 'style' && entry.styleStrength) { setStyleStrength(entry.styleStrength); }
         } else if (entry.mode === 'video') {
             setActiveVideoFunction(entry.videoFunction || 'prompt');
             setStartFrame(entry.startFrame || null);
@@ -942,41 +930,29 @@ export default function App() {
         setStyleModifier(options.length > 0 ? options[0].value : 'default');
     };
 
-    const handleAspectRatioChange = (ratio: string) => {
-        setAspectRatio(ratio);
-    };
-
     const handleEditFunctionClick = (func: EditFunction) => {
-        if (func !== activeEditFunction) {
-            setReferenceImages([]);
-        }
+        if (func !== activeEditFunction) setReferenceImages([]);
         setActiveEditFunction(func);
     };
 
     const handleVideoFunctionClick = (func: VideoFunction) => {
-        if (func !== activeVideoFunction) {
-            setStartFrame(null);
-            setStartFramePreview(null);
-        }
+        if (func !== activeVideoFunction) { setStartFrame(null); setStartFramePreview(null); }
         setActiveVideoFunction(func);
     };
 
     const processSingleFile = useCallback((file: File, callback: (image: UploadedImage, previewUrl: string) => void) => {
         const id = `upload-${file.name}-${Date.now()}`;
-
         if (file.size > 10 * 1024 * 1024) {
-            setUploadProgress(prev => [...prev, { id, name: file.name, progress: 100, status: 'error', message: 'Excede o limite de 10MB.' }]);
+            setUploadProgress(prev => [...prev, { id, name: file.name, progress: 100, status: 'error', message: 'Excede 10MB.' }]);
             setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
             return;
         }
         if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-            setUploadProgress(prev => [...prev, { id, name: file.name, progress: 100, status: 'error', message: 'Tipo de arquivo inválido.' }]);
+            setUploadProgress(prev => [...prev, { id, name: file.name, progress: 100, status: 'error', message: 'Tipo inválido.' }]);
             setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
             return;
         }
-
         setUploadProgress(prev => [...prev, { id, name: file.name, progress: 0, status: 'uploading' }]);
-
         const reader = new FileReader();
         reader.onprogress = (event) => {
             if (event.lengthComputable) {
@@ -985,7 +961,7 @@ export default function App() {
             }
         };
         reader.onerror = () => {
-            setUploadProgress(p => p.map(item => item.id === id ? { ...item, status: 'error', message: 'Falha ao ler o arquivo.' } : item));
+            setUploadProgress(p => p.map(item => item.id === id ? { ...item, status: 'error', message: 'Falha ao ler.' } : item));
             setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
         };
         reader.onload = () => {
@@ -998,289 +974,83 @@ export default function App() {
         reader.readAsDataURL(file);
     }, []);
     
-    const processUploadedFiles = useCallback((files: File[], target: 'main' | 'reference') => {
-        let isMainImageSlotFilled = history.length > 0;
-        const filesToProcess = [...files];
+    const handleDropOnCanvas = (files: FileList) => {
+        if (mode !== 'edit' || !files || files.length === 0) return;
 
-        if (target === 'main' && filesToProcess.length > 1) {
-            filesToProcess.splice(1);
-        }
-        
-        if (target === 'reference' && activeEditFunction === 'style') {
-            if (filesToProcess.length > 1) {
-                filesToProcess.splice(1);
-            }
-        }
+        const processMainImage = (file: File) => {
+            processSingleFile(file, (uploadedImage, dataUrl) => {
+                const initialEntry: HistoryEntry = { id: `hist-${Date.now()}`, imageUrl: dataUrl, prompt: '', mode: 'edit', editFunction: activeEditFunction, referenceImages: [] };
+                resetDetectionState();
+                setHistory([initialEntry]);
+                setHistoryIndex(0);
+                setReferenceImages([]);
+                setPrompt('');
+            });
+        };
 
-        filesToProcess.forEach((file, index) => {
-            const id = `upload-${file.name}-${Date.now()}-${Math.random()}`;
-            const isMainImageTarget = (target === 'main') || (target === 'reference' && !isMainImageSlotFilled && index === 0);
-
-            if (file.size > 10 * 1024 * 1024) {
-                setUploadProgress(prev => [...prev, { id, name: file.name, progress: 100, status: 'error', message: 'Excede o limite de 10MB.' }]);
-                setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
-                return;
-            }
-            if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-                setUploadProgress(prev => [...prev, { id, name: file.name, progress: 100, status: 'error', message: 'Tipo de arquivo inválido.' }]);
-                setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
-                return;
-            }
-            
-            setUploadProgress(prev => [...prev, { id, name: file.name, progress: 0, status: 'uploading' }]);
-            
-            const reader = new FileReader();
-
-            reader.onprogress = (event) => {
-                if (event.lengthComputable) {
-                    const progress = Math.round((event.loaded / event.total) * 100);
-                    setUploadProgress(p => p.map(item => item.id === id ? { ...item, progress } : item));
-                }
-            };
-
-            reader.onerror = () => {
-                setUploadProgress(p => p.map(item => item.id === id ? { ...item, status: 'error', message: 'Falha ao ler o arquivo.' } : item));
-                setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
-            };
-
-            reader.onload = async () => {
-                setUploadProgress(p => p.map(item => item.id === id ? { ...item, status: 'success', progress: 100 } : item));
-                
-                const dataUrl = reader.result as string;
-                const uploadedImage: UploadedImage = { base64: dataUrl.split(',')[1], mimeType: file.type };
-                
-                if (isMainImageTarget) {
-                    const initialEntry: HistoryEntry = {
-                        id: `hist-${Date.now()}`,
-                        imageUrl: dataUrl,
-                        prompt: '',
-                        mode: 'edit',
-                        editFunction: activeEditFunction,
-                        referenceImages: [],
-                    };
-                    resetDetectionState();
-                    setHistory([initialEntry]);
-                    setHistoryIndex(0);
-                    setReferenceImages([]);
-                    setPrompt('');
-                    isMainImageSlotFilled = true;
-                } else {
-                    const newRefImage: ReferenceImage = { image: uploadedImage, previewUrl: dataUrl, mask: null };
-                    if (activeEditFunction === 'style') {
-                        setReferenceImages([newRefImage]);
-                        setIsAnalyzingStyle(true);
-                        setError(null);
-                        try {
-                            const styleDescription = await analyzeImageStyle(uploadedImage);
-                            if (styleDescription) {
-                                setPrompt(styleDescription);
-                            }
-                        } catch (analysisError) {
-                            console.error("Style analysis failed:", analysisError);
-                            setError("Não foi possível analisar o estilo da imagem de referência.");
-                        } finally {
-                            setIsAnalyzingStyle(false);
-                        }
-                    } else {
-                        setReferenceImages(prev => [...prev, newRefImage]);
-                    }
-                }
-
-                setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 1500);
-            };
-            
-            reader.readAsDataURL(file);
-        });
-    }, [history.length, activeEditFunction, resetDetectionState]);
-
-    const handleImageUpload = useCallback((files: FileList | null, target: 'main' | 'reference') => {
-        if (!files || files.length === 0 || mode !== 'edit') return;
-
-        if (target === 'main' && generatedImage && isEditStateDirty()) {
-             setConfirmationDialog({
+        if (generatedImage && isEditStateDirty()) {
+            setConfirmationDialog({
                 isOpen: true,
                 title: 'Substituir Imagem Principal?',
                 message: 'Isso substituirá a imagem atual e limpará o histórico de edições. Deseja continuar?',
-                onConfirm: () => processUploadedFiles(Array.from(files), target)
+                onConfirm: () => processMainImage(files[0]),
             });
         } else {
-            processUploadedFiles(Array.from(files), target);
+            processMainImage(files[0]);
         }
-    }, [mode, generatedImage, isEditStateDirty, processUploadedFiles]);
-
+    };
+    
     const handleRemoveReferenceImage = (indexToRemove: number) => {
         setReferenceImages(prev => prev.filter((_, index) => index !== indexToRemove));
-        if (activeEditFunction === 'style') {
-            setPrompt('');
-        }
-    };
-    
-    const handleRemoveStartFrame = () => {
-        setStartFrame(null);
-        setStartFramePreview(null);
+        if (activeEditFunction === 'style') setPrompt('');
     };
 
-    const handleClearAllImages = () => {
-        if (isEditStateDirty()) {
-            setConfirmationDialog({
-                isOpen: true,
-                title: 'Limpar Tudo?',
-                message: 'Isso removerá a imagem principal e todas as referências, limpando o histórico. Deseja continuar?',
-                onConfirm: () => {
-                    setHistory([]);
-                    setHistoryIndex(-1);
-                    setReferenceImages([]);
-                    setPrompt('');
-                    setNegativePrompt('');
-                    resetDetectionState();
-                }
-            });
-        } else {
-            setHistory([]);
-            setHistoryIndex(-1);
-            setReferenceImages([]);
-            setPrompt('');
-            setNegativePrompt('');
-            resetDetectionState();
-        }
-    };
-    
-    const handleRemoveMainImage = () => {
-         if (isEditStateDirty()) {
-             setConfirmationDialog({
-                isOpen: true,
-                title: 'Remover Imagem Principal?',
-                message: 'Isso removerá a imagem principal e todas as suas edições. Deseja continuar?',
-                onConfirm: () => {
-                    setHistory([]);
-                    setHistoryIndex(-1);
-                    setPrompt('');
-                    setNegativePrompt('');
-                    resetDetectionState();
-                }
-            });
-         } else {
-            setHistory([]);
-            setHistoryIndex(-1);
-            setPrompt('');
-            setNegativePrompt('');
-            resetDetectionState();
-         }
-    };
-
-    const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        e.stopPropagation();
-    };
-
-    const handleDragEnter = (e: React.DragEvent<HTMLDivElement>, target: 'main' | 'reference') => {
-        e.preventDefault();
-        e.stopPropagation();
-        dragCounter.current++;
-        if (dragCounter.current === 1) {
-            setIsDragging(true);
-        }
-        setDragTarget(target);
-    };
-
-    const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        e.stopPropagation();
-        dragCounter.current--;
-        if (dragCounter.current === 0) {
-            setIsDragging(false);
-            setDragTarget(null);
-        }
-    };
-
-    const handleDrop = (e: React.DragEvent<HTMLDivElement>, target: 'main' | 'reference') => {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsDragging(false);
-        setDragTarget(null);
-        dragCounter.current = 0;
-        if (e.dataTransfer.files) {
-            handleImageUpload(e.dataTransfer.files, target);
-        }
+    const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); };
+    const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); dragCounter.current++; if (dragCounter.current === 1) setIsDragging(true); };
+    const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); dragCounter.current--; if (dragCounter.current === 0) setIsDragging(false); };
+    const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault(); e.stopPropagation();
+        setIsDragging(false); dragCounter.current = 0;
+        if (e.dataTransfer.files) handleDropOnCanvas(e.dataTransfer.files);
     };
 
     const handleDetectObjects = async () => {
         if (!generatedImage || isDetectingObjects) return;
-
-        setIsDetectingObjects(true);
-        setError(null);
+        setIsDetectingObjects(true); setError(null);
         try {
             const base64 = generatedImage.split(',')[1];
             const mimeType = generatedImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
             const detected = await detectObjects({ base64, mimeType });
             setDetectedObjects(detected);
-        } catch (e: any) {
-            setError(e.message);
-        } finally {
-            setIsDetectingObjects(false);
-        }
+        } catch (e: any) { setError(e.message); } finally { setIsDetectingObjects(false); }
     };
 
     const handleGenerateObjectMask = async (object: DetectedObject) => {
         if (!generatedImage) return;
-
-        setError(null);
-        setHighlightedObject(object);
-
+        setError(null); setHighlightedObject(object);
         const newReferenceImages = [...referenceImages];
-        const newRef: ReferenceImage = { 
-            image: { base64: '', mimeType: '' }, 
-            previewUrl: '',
-            mask: null,
-            isExtractingObject: true,
-        };
+        const newRef: ReferenceImage = { image: { base64: '', mimeType: '' }, previewUrl: '', mask: null, isExtractingObject: true };
         newReferenceImages.push(newRef);
         const newIndex = newReferenceImages.length - 1;
         setReferenceImages(newReferenceImages);
-
         try {
             const base64 = generatedImage.split(',')[1];
             const mimeType = generatedImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
-            const fullImage: UploadedImage = { base64, mimeType };
-
             const tempCanvas = document.createElement('canvas');
             const img = new Image();
             img.src = generatedImage;
             await new Promise(resolve => img.onload = resolve);
-            tempCanvas.width = img.width;
-            tempCanvas.height = img.height;
+            tempCanvas.width = img.width; tempCanvas.height = img.height;
             const ctx = tempCanvas.getContext('2d');
             if (!ctx) throw new Error("Could not create canvas context");
-            
             const { x1, y1, x2, y2 } = object.box;
-            const cropX = x1 * img.width;
-            const cropY = y1 * img.height;
-            const cropW = (x2 - x1) * img.width;
-            const cropH = (y2 - y1) * img.height;
-
+            const cropX = x1 * img.width, cropY = y1 * img.height, cropW = (x2 - x1) * img.width, cropH = (y2 - y1) * img.height;
             ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
             const croppedDataUrl = tempCanvas.toDataURL(mimeType);
-            const croppedImage: UploadedImage = {
-                base64: croppedDataUrl.split(',')[1],
-                mimeType: mimeType,
-            };
-
+            const croppedImage: UploadedImage = { base64: croppedDataUrl.split(',')[1], mimeType: mimeType };
             const mask = await generateObjectMask(croppedImage);
             const maskUrl = `data:${mask.mimeType};base64,${mask.base64}`;
-
-            setReferenceImages(prev => prev.map((ref, index) => {
-                if (index === newIndex) {
-                    return {
-                        image: croppedImage,
-                        previewUrl: croppedDataUrl,
-                        mask: mask,
-                        maskedObjectPreviewUrl: maskUrl,
-                        isExtractingObject: false,
-                    };
-                }
-                return ref;
-            }));
-
+            setReferenceImages(prev => prev.map((ref, index) => index === newIndex ? { image: croppedImage, previewUrl: croppedDataUrl, mask: mask, maskedObjectPreviewUrl: maskUrl, isExtractingObject: false } : ref));
         } catch (e: any) {
             setError(e.message);
             setReferenceImages(prev => prev.filter((_, index) => index !== newIndex));
@@ -1290,130 +1060,44 @@ export default function App() {
     };
 
     const applyFilter = (filterPrompt: string) => {
-        if (!generatedImage) {
-            setError("Por favor, gere ou envie uma imagem primeiro para aplicar um filtro.");
-            return;
-        }
-        setPrompt(filterPrompt);
-        handleSubmit(new Event('submit') as any); 
+        if (!generatedImage) { setError("Por favor, gere ou envie uma imagem primeiro para aplicar um filtro."); return; }
+        setPrompt(filterPrompt); handleSubmit(new Event('submit') as any); 
     };
 
-    const handleSubmit = async (e: React.FormEvent<HTMLFormElement> | React.MouseEvent<HTMLButtonElement>) => {
-        e.preventDefault();
-        setError(null);
-        if (isLoading) return;
+    const handleBananaClick = async () => {
+        if (mode !== 'create' || isLoading) return;
 
-        let newHistoryEntry: HistoryEntry;
+        setError(null);
+        setIsLoading(true);
+        setLoadingMessage('Gerando sua banana especial...');
 
         try {
-            if (mode === 'create') {
-                if (!prompt) {
-                    setError("Por favor, insira um prompt para gerar uma imagem.");
-                    return;
-                }
-                setIsLoading(true);
-                setLoadingMessage('Gerando sua imagem...');
-
-                const imageUrl = await generateImage(
-                    prompt, 
-                    activeCreateFunction, 
-                    aspectRatio, 
-                    negativePrompt,
-                    styleModifier,
-                    cameraAngle,
-                    lightingStyle,
-                    comicColorPalette
-                );
-                
-                newHistoryEntry = {
-                    id: `hist-${Date.now()}`,
-                    imageUrl,
-                    prompt,
-                    negativePrompt,
-                    mode,
-                    createFunction: activeCreateFunction,
-                    aspectRatio,
-                    comicColorPalette: activeCreateFunction === 'comic' ? comicColorPalette : undefined,
-                    styleModifier,
-                    cameraAngle,
-                    lightingStyle,
-                };
-
-            } else if (mode === 'edit') {
-                if (!generatedImage) {
-                    setError("Por favor, envie uma imagem para começar a editar.");
-                    return;
-                }
-
-                const mainImageBase64 = generatedImage.split(',')[1];
-                const mainImageMimeType = generatedImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
-                const mainImage: UploadedImage = { base64: mainImageBase64, mimeType: mainImageMimeType };
-
-                const maskData = editorRef.current?.getMaskData() || null;
-                const originalSize = editorRef.current?.getOriginalImageSize() || null;
-
-                if (!prompt && referenceImages.length === 0 && !maskData) {
-                    setError("Descreva sua edição, adicione uma imagem de referência ou selecione uma área para editar.");
-                    return;
-                }
-                
-                setIsLoading(true);
-                setLoadingMessage('Aplicando sua edição...');
-
-                const resultImageUrl = await processImagesWithPrompt(
-                    prompt,
-                    mainImage,
-                    referenceImages,
-                    maskData,
-                    activeEditFunction,
-                    originalSize,
-                    styleStrength,
-                    negativePrompt
-                );
-
-                if (resultImageUrl.startsWith('A edição foi bloqueada')) {
-                   throw new Error(resultImageUrl);
-                }
-
-                newHistoryEntry = {
-                    id: `hist-${Date.now()}`,
-                    imageUrl: resultImageUrl,
-                    prompt,
-                    negativePrompt,
-                    mode,
-                    editFunction: activeEditFunction,
-                    referenceImages: [...referenceImages], // Deep copy might be needed if masks are mutable
-                    styleStrength: activeEditFunction === 'style' ? styleStrength : undefined,
-                };
-                
-            } else if (mode === 'video') {
-                if (!prompt) {
-                    setError("Por favor, insira um prompt para gerar um vídeo.");
-                    return;
-                }
-                if (activeVideoFunction === 'animation' && !startFrame) {
-                     setError("Por favor, envie uma imagem inicial para a animação.");
-                     return;
-                }
-                
-                setIsLoading(true);
-                setLoadingMessage('A geração de vídeo pode levar alguns minutos. Estamos trabalhando nisso...');
-                
-                const videoUrl = await generateVideo(prompt, startFrame || undefined);
-
-                newHistoryEntry = {
-                    id: `hist-${Date.now()}`,
-                    videoUrl,
-                    prompt,
-                    mode,
-                    videoFunction: activeVideoFunction,
-                    startFrame: startFrame || undefined,
-                    startFramePreviewUrl: startFramePreview || undefined,
-                };
-
-            } else {
-                return;
-            }
+            const easterEggPrompt = "Uma banana estilizada, de corpo inteiro, usando uma camiseta da seleção brasileira de futebol, em um fundo neutro.";
+            
+            const imageUrl = await generateImage(
+                easterEggPrompt,
+                activeCreateFunction,
+                aspectRatio,
+                negativePrompt,
+                styleModifier,
+                cameraAngle,
+                lightingStyle,
+                comicColorPalette
+            );
+            
+            const newHistoryEntry: HistoryEntry = {
+                id: `hist-${Date.now()}`,
+                imageUrl,
+                prompt: easterEggPrompt,
+                negativePrompt,
+                mode: 'create',
+                createFunction: activeCreateFunction,
+                aspectRatio,
+                comicColorPalette: activeCreateFunction === 'comic' ? comicColorPalette : undefined,
+                styleModifier,
+                cameraAngle,
+                lightingStyle
+            };
 
             setHistory(prev => {
                 const newHistory = prev.slice(0, historyIndex + 1);
@@ -1421,40 +1105,69 @@ export default function App() {
                 return newHistory;
             });
             setHistoryIndex(prev => prev + 1);
+            
             setReferenceImages([]);
             resetDetectionState();
             editorRef.current?.clearMask();
 
         } catch (e: any) {
-            setError(e.message || "Ocorreu um erro desconhecido.");
+            setError(e.message || "A banana tropeçou! Ocorreu um erro.");
         } finally {
             setIsLoading(false);
         }
     };
+
+
+    const handleSubmit = async (e: React.FormEvent<HTMLFormElement> | React.MouseEvent<HTMLButtonElement>) => {
+        e.preventDefault(); setError(null);
+        if (isLoading) return;
+        let newHistoryEntry: HistoryEntry;
+        try {
+            if (mode === 'create') {
+                if (!prompt) { setError("Por favor, insira um prompt para gerar uma imagem."); return; }
+                setIsLoading(true); setLoadingMessage('Gerando sua imagem...');
+                const imageUrl = await generateImage(prompt, activeCreateFunction, aspectRatio, negativePrompt, styleModifier, cameraAngle, lightingStyle, comicColorPalette);
+                newHistoryEntry = { id: `hist-${Date.now()}`, imageUrl, prompt, negativePrompt, mode, createFunction: activeCreateFunction, aspectRatio, comicColorPalette: activeCreateFunction === 'comic' ? comicColorPalette : undefined, styleModifier, cameraAngle, lightingStyle };
+            } else if (mode === 'edit') {
+                if (!generatedImage) { setError("Por favor, envie uma imagem para começar a editar."); return; }
+                const mainImageBase64 = generatedImage.split(',')[1];
+                const mainImageMimeType = generatedImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
+                const mainImage: UploadedImage = { base64: mainImageBase64, mimeType: mainImageMimeType };
+                const maskData = editorRef.current?.getMaskData() || null;
+                const originalSize = editorRef.current?.getOriginalImageSize() || null;
+                if (!prompt && referenceImages.length === 0 && !maskData) { setError("Descreva sua edição, adicione uma imagem de referência ou selecione uma área para editar."); return; }
+                setIsLoading(true); setLoadingMessage('Aplicando sua edição...');
+                const resultImageUrl = await processImagesWithPrompt(prompt, mainImage, referenceImages, maskData, activeEditFunction, originalSize, styleStrength, negativePrompt);
+                if (resultImageUrl.startsWith('A edição foi bloqueada')) { throw new Error(resultImageUrl); }
+                newHistoryEntry = { id: `hist-${Date.now()}`, imageUrl: resultImageUrl, prompt, negativePrompt, mode, editFunction: activeEditFunction, referenceImages: [...referenceImages], styleStrength: activeEditFunction === 'style' ? styleStrength : undefined };
+            } else if (mode === 'video') {
+                if (!prompt) { setError("Por favor, insira um prompt para gerar um vídeo."); return; }
+                if (activeVideoFunction === 'animation' && !startFrame) { setError("Por favor, envie uma imagem inicial para a animação."); return; }
+                setIsLoading(true); setLoadingMessage('A geração de vídeo pode levar alguns minutos...');
+                const videoUrl = await generateVideo(prompt, startFrame || undefined);
+                newHistoryEntry = { id: `hist-${Date.now()}`, videoUrl, prompt, mode, videoFunction: activeVideoFunction, startFrame: startFrame || undefined, startFramePreviewUrl: startFramePreview || undefined };
+            } else { return; }
+            setHistory(prev => {
+                const newHistory = prev.slice(0, historyIndex + 1);
+                newHistory.push(newHistoryEntry);
+                return newHistory;
+            });
+            setHistoryIndex(prev => prev + 1);
+            setReferenceImages([]); resetDetectionState(); editorRef.current?.clearMask();
+        } catch (e: any) { setError(e.message || "Ocorreu um erro desconhecido."); } finally { setIsLoading(false); }
+    };
     
-    // Auto-resize textarea
     useEffect(() => {
         [textareaRef, negativeTextareaRef].forEach(ref => {
             const textarea = ref.current;
-            if (textarea) {
-                textarea.style.height = 'auto';
-                textarea.style.height = `${textarea.scrollHeight}px`;
-            }
+            if (textarea) { textarea.style.height = 'auto'; textarea.style.height = `${textarea.scrollHeight}px`; }
         });
     }, [prompt, negativePrompt]);
 
-    useEffect(() => {
-        if (window.innerWidth < 768) {
-            setShowMobileModal(true);
-        }
-    }, []);
+    useEffect(() => { if (window.innerWidth < 1024) setShowMobileModal(true); }, []);
 
-    // Derived state for easier rendering
     const canUndo = historyIndex > 0;
     const canRedo = historyIndex < history.length - 1;
-    const isEditing = mode === 'edit';
-    const showAdvancedCreateControls = activeCreateFunction === 'free' || activeCreateFunction === 'comic';
-
 
     const MainContentDisplay = () => {
         if (isLoading) {
@@ -1470,32 +1183,19 @@ export default function App() {
                 </div>
             );
         }
-
         if (generatedVideo) {
              return (
                 <div className="w-full h-full flex items-center justify-center p-4">
-                     <video
-                        key={generatedVideo}
-                        src={generatedVideo}
-                        controls
-                        autoPlay
-                        loop
-                        className="max-w-full max-h-full rounded-lg shadow-lg"
-                     />
+                     <video key={generatedVideo} src={generatedVideo} controls autoPlay loop className="max-w-full max-h-full rounded-lg shadow-lg" />
                  </div>
              );
         }
-
         if (generatedImage) {
             return (
                 <div className="w-full h-full relative" ref={placerContainerRef}>
                     <ImageEditor
-                        ref={editorRef}
-                        key={generatedImage}
-                        src={generatedImage}
-                        activeEditFunction={isEditing ? activeEditFunction : null}
-                        detectedObjects={detectedObjects}
-                        highlightedObject={highlightedObject}
+                        ref={editorRef} key={generatedImage} src={generatedImage} activeEditFunction={mode === 'edit' ? activeEditFunction : null}
+                        detectedObjects={detectedObjects} highlightedObject={highlightedObject} zoom={zoom}
                     />
                     {placingImageIndex !== null && referenceImages[placingImageIndex] && (
                         <ObjectPlacer 
@@ -1505,8 +1205,7 @@ export default function App() {
                             onConfirm={(placerTransform) => {
                                 editorRef.current?.stampObjectOnMask({
                                     previewUrl: referenceImages[placingImageIndex].maskedObjectPreviewUrl || referenceImages[placingImageIndex].previewUrl,
-                                    placerTransform,
-                                    maskOpacity: 0.6,
+                                    placerTransform, maskOpacity: 0.6,
                                 });
                                 setPlacingImageIndex(null);
                             }}
@@ -1515,445 +1214,207 @@ export default function App() {
                 </div>
             );
         }
-
         return (
              <div className="flex flex-col items-center justify-center h-full text-center text-zinc-500 p-8 border-2 border-dashed border-zinc-800 rounded-lg">
                 <Icons.Sparkles className="text-6xl text-zinc-700 mb-4" />
                 <h2 className="text-xl font-bold text-zinc-400 mb-2">Bem-vindo ao Nano Banana Studio</h2>
                 <p className="max-w-md">
-                   {mode === 'create' && "Use a barra de prompt abaixo para descrever a imagem que você deseja criar. Seja criativo e detalhado!"}
-                   {mode === 'edit' && "Arraste uma imagem para esta área ou use o painel à esquerda para começar a editar."}
-                   {mode === 'video' && "Descreva a cena para gerar um vídeo ou envie uma imagem inicial para animá-la."}
+                   {mode === 'create' && "Selecione uma ferramenta à esquerda e descreva sua imagem no painel à direita."}
+                   {mode === 'edit' && "Arraste uma imagem para esta área para começar a editar."}
+                   {mode === 'video' && "Selecione uma ferramenta de vídeo e use o painel à direita para gerar."}
                 </p>
             </div>
         );
     };
 
     return (
-        <div className="h-screen w-screen bg-zinc-950 text-zinc-200 flex flex-col md:flex-row overflow-hidden">
-            {/* Mobile View Blocker */}
+        <>
             {showMobileModal && (
                 <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 text-center">
                     <div className="bg-zinc-900 p-6 rounded-lg max-w-sm w-full shadow-xl ring-1 ring-white/10">
                         <h2 className="text-xl font-bold mb-4 text-zinc-100">Otimizado para Desktop</h2>
-                        <p className="text-zinc-300">
-                            Para a melhor experiência, por favor, acesse este aplicativo em um computador desktop.
-                        </p>
+                        <p className="text-zinc-300">Para a melhor experiência, por favor, acesse este aplicativo em um computador desktop.</p>
                     </div>
                 </div>
             )}
-             {/* Confirmation Dialog */}
-            <ConfirmationDialog 
-                isOpen={confirmationDialog.isOpen}
-                title={confirmationDialog.title}
-                message={confirmationDialog.message}
-                onConfirm={handleConfirm}
-                onCancel={closeConfirmationDialog}
-            />
+            <ConfirmationDialog isOpen={confirmationDialog.isOpen} title={confirmationDialog.title} message={confirmationDialog.message} onConfirm={handleConfirm} onCancel={closeConfirmationDialog} />
 
-            {/* Left Panel */}
-            <aside className="w-full md:w-80 bg-zinc-900 flex flex-col shrink-0 border-r border-zinc-800">
-                {/* Header */}
-                <header className="p-3 border-b border-zinc-800 flex items-center justify-between shrink-0">
-                    <h1 className="text-base font-semibold">🍌 Nano Banana</h1>
-                    <div className="flex items-center gap-1">
-                        <button 
-                            onClick={() => handleHistoryNavigation(historyIndex - 1)}
-                            disabled={!canUndo || isLoading}
-                            className="p-1.5 rounded-md hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed"
-                            title="Desfazer (Cmd/Ctrl + Z)"
-                        >
-                            <Icons.Undo />
-                        </button>
-                         <button 
-                            onClick={() => handleHistoryNavigation(historyIndex + 1)}
-                            disabled={!canRedo || isLoading}
-                            className="p-1.5 rounded-md hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed"
-                            title="Refazer (Cmd/Ctrl + Shift + Z)"
-                        >
-                            <Icons.Redo />
-                        </button>
-                    </div>
-                </header>
-                
-                {/* Mode Toggles */}
-                <div className="p-3 border-b border-zinc-800 shrink-0">
-                    <div className="grid grid-cols-3 gap-2">
-                        <FunctionButton size="large" data-function="create" isActive={mode === 'create'} onClick={() => handleModeToggle('create')} icon={<Icons.Create />} name="Criar" />
-                        <FunctionButton size="large" data-function="edit" isActive={mode === 'edit'} onClick={() => handleModeToggle('edit')} icon={<Icons.Edit />} name="Editar" />
-                        <FunctionButton size="large" data-function="video" isActive={mode === 'video'} onClick={() => handleModeToggle('video')} icon={<Icons.Video />} name="Vídeo" />
+            <header className="app-header bg-zinc-900 border-b border-zinc-800 flex items-center justify-between px-4">
+                <div className="flex items-center gap-4">
+                    <button 
+                        onClick={handleBananaClick}
+                        className={`text-2xl transition-transform hover:scale-110 ${mode === 'create' && !isLoading ? 'cursor-pointer' : 'cursor-default opacity-50'}`}
+                        title={mode === 'create' ? "Clique para uma surpresa!" : "Disponível apenas no modo CRIAR"}
+                        disabled={isLoading || mode !== 'create'}
+                    >
+                        🍌
+                    </button>
+                    <div className="grid grid-cols-3 gap-1 bg-zinc-800 p-1 rounded-md">
+                         <button onClick={() => handleModeToggle('create')} className={`px-4 py-1 text-xs font-bold rounded ${mode === 'create' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700'}`}>CRIAR</button>
+                         <button onClick={() => handleModeToggle('edit')} className={`px-4 py-1 text-xs font-bold rounded ${mode === 'edit' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700'}`}>EDITAR</button>
+                         <button onClick={() => handleModeToggle('video')} className={`px-4 py-1 text-xs font-bold rounded ${mode === 'video' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700'}`}>VÍDEO</button>
                     </div>
                 </div>
-
-                {/* Controls Section (scrollable) */}
-                <div className="flex-1 overflow-y-auto divide-y divide-zinc-800">
-                    {mode === 'create' && (
-                        <>
-                            <PanelSection title="Função" icon={<Icons.Sparkles />}>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <FunctionButton data-function="free" isActive={activeCreateFunction === 'free'} onClick={handleCreateFunctionClick} icon={<Icons.Image />} name="Livre" />
-                                    <FunctionButton data-function="sticker" isActive={activeCreateFunction === 'sticker'} onClick={handleCreateFunctionClick} icon={<Icons.Sticker />} name="Sticker" />
-                                    <FunctionButton data-function="text" isActive={activeCreateFunction === 'text'} onClick={handleCreateFunctionClick} icon={<Icons.Type />} name="Texto" />
-                                    <FunctionButton data-function="comic" isActive={activeCreateFunction === 'comic'} onClick={handleCreateFunctionClick} icon={<Icons.Comic />} name="HQ" />
-                                </div>
-                            </PanelSection>
-                            <PanelSection title="Configurações" icon={<Icons.Settings />}>
-                                {styleOptions[activeCreateFunction].length > 0 && (
-                                     <div className="custom-select-wrapper">
-                                        <select
-                                            value={styleModifier}
-                                            onChange={(e) => setStyleModifier(e.target.value)}
-                                            className="custom-select"
-                                            aria-label="Estilo do sticker"
-                                        >
-                                            <option value="default" disabled>Selecione um Estilo</option>
-                                            {styleOptions[activeCreateFunction].map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                                        </select>
-                                    </div>
-                                )}
-                                <div className="custom-select-wrapper">
-                                    <select
-                                        value={aspectRatio}
-                                        onChange={(e) => handleAspectRatioChange(e.target.value)}
-                                        className="custom-select"
-                                        aria-label="Proporção da imagem"
-                                    >
-                                        {ALL_SUPPORTED_ASPECT_RATIOS.map((group) => (
-                                            <optgroup label={group.label} key={group.label}>
-                                                {group.options.map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}
-                                            </optgroup>
-                                        ))}
-                                    </select>
-                                </div>
-                                {activeCreateFunction === 'comic' && (
-                                    <div className="flex items-center gap-2 bg-zinc-800 p-1 rounded-md">
-                                        <button 
-                                            onClick={() => setComicColorPalette('vibrant')}
-                                            className={`w-1/2 text-center text-xs font-semibold px-2 py-1.5 rounded-md transition-colors ${comicColorPalette === 'vibrant' ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-700/50'}`}
-                                        >
-                                            Vibrante
-                                        </button>
-                                        <button
-                                             onClick={() => setComicColorPalette('noir')}
-                                             className={`w-1/2 text-center text-xs font-semibold px-2 py-1.5 rounded-md transition-colors ${comicColorPalette === 'noir' ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-700/50'}`}
-                                        >
-                                            Noir
-                                        </button>
-                                    </div>
-                                )}
-                            </PanelSection>
-                            {showAdvancedCreateControls && (
-                                <PanelSection title="Avançado" icon={<Icons.Sliders />} defaultOpen={false}>
-                                    <div className="space-y-4">
-                                         <div className="custom-select-wrapper">
-                                            <label className="block text-sm font-medium text-zinc-400 mb-1">Ângulo da Câmera</label>
-                                            <select value={cameraAngle} onChange={(e) => setCameraAngle(e.target.value)} className="custom-select">
-                                                {cameraAngleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                                            </select>
-                                        </div>
-                                         <div className="custom-select-wrapper">
-                                            <label className="block text-sm font-medium text-zinc-400 mb-1">Iluminação</label>
-                                            <select value={lightingStyle} onChange={(e) => setLightingStyle(e.target.value)} className="custom-select">
-                                                {lightingStyleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                                            </select>
-                                        </div>
-                                    </div>
-                                </PanelSection>
-                            )}
-                        </>
+                <div className="flex items-center gap-2">
+                    <button onClick={() => handleHistoryNavigation(historyIndex - 1)} disabled={!canUndo || isLoading} className="p-2 rounded-md hover:bg-zinc-800 disabled:opacity-40" title="Desfazer"><Icons.Undo /></button>
+                    <button onClick={() => handleHistoryNavigation(historyIndex + 1)} disabled={!canRedo || isLoading} className="p-2 rounded-md hover:bg-zinc-800 disabled:opacity-40" title="Refazer"><Icons.Redo /></button>
+                    {(generatedImage || generatedVideo) && (
+                        <a href={generatedImage || generatedVideo || '#'} download={`nanobanana-${Date.now()}.${generatedImage ? 'png' : 'mp4'}`} className="text-sm font-semibold py-1.5 px-3 bg-blue-600 hover:bg-blue-500 text-white rounded-md transition-colors flex items-center gap-2 ml-2">
+                            <Icons.Save /> Salvar
+                        </a>
                     )}
+                </div>
+            </header>
 
-                    {mode === 'edit' && (
-                        <>
-                            <PanelSection title="Função de Edição" icon={<Icons.Layers />}>
-                               <div className="grid grid-cols-2 gap-2">
-                                    <FunctionButton data-function="compose" isActive={activeEditFunction === 'compose'} onClick={handleEditFunctionClick} icon={<Icons.Layers />} name="Compor" />
-                                    <FunctionButton data-function="style" isActive={activeEditFunction === 'style'} onClick={handleEditFunctionClick} icon={<Icons.Palette />} name="Estilizar" />
-                                </div>
-                            </PanelSection>
-                            
-                            <PanelSection title="Imagens de Referência" icon={<Icons.Reference />}>
-                                {activeEditFunction === 'compose' ? (
-                                    <>
-                                        <div className="grid grid-cols-2 gap-2 h-32">
-                                            {referenceImages.slice(0, 4).map((ref, index) => (
-                                                <div key={index} className="relative group w-full h-full bg-zinc-800 rounded-md overflow-hidden">
-                                                    <img src={ref.previewUrl} alt={`Referência ${index + 1}`} className="w-full h-full object-contain" />
-                                                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                                                        <button onClick={() => setPlacingImageIndex(index)} className="p-2 bg-zinc-900/80 text-blue-400 rounded-full hover:bg-zinc-700 transition-colors" title="Posicionar Objeto">
-                                                            <Icons.AddPhoto />
-                                                        </button>
-                                                        <button onClick={() => handleRemoveReferenceImage(index)} className="p-2 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700 transition-colors" title="Remover">
-                                                            <Icons.Close />
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                            {referenceImages.length < 4 && (
-                                                <ImageUploadSlot
-                                                    id="ref-upload-compose"
-                                                    label="Referência"
-                                                    icon={<Icons.UploadCloud className="text-3xl" />}
-                                                    imagePreviewUrl={null}
-                                                    onUpload={(file) => processUploadedFiles([file], 'reference')}
-                                                    onRemove={() => {}}
-                                                />
-                                            )}
-                                        </div>
-                                         <button
-                                            onClick={() => editorRef.current?.clearMask()}
-                                            className="w-full text-sm font-semibold py-2 px-3 bg-zinc-800 hover:bg-zinc-700 rounded-md transition-colors flex items-center justify-center gap-2 mt-4"
-                                        >
-                                            <Icons.Deselect /> Limpar Objetos Posicionados
-                                        </button>
-                                    </>
-                                ) : (
-                                    <div className="h-32">
-                                        <ImageUploadSlot
-                                            id="ref-upload-style"
-                                            label="Estilo"
-                                            icon={<Icons.UploadCloud className="text-3xl" />}
-                                            imagePreviewUrl={referenceImages[0]?.previewUrl || null}
-                                            onUpload={(file) => processUploadedFiles([file], 'reference')}
-                                            onRemove={() => handleRemoveReferenceImage(0)}
-                                        />
-                                    </div>
-                                )}
-                                {isAnalyzingStyle && <div className="text-sm text-zinc-400 mt-2 flex items-center"><Icons.Spinner className="mr-2"/>Analisando estilo...</div>}
-                            </PanelSection>
-                            
-                            {activeEditFunction === 'style' && (
-                                <PanelSection title="Intensidade do Estilo" icon={<Icons.Sliders />}>
-                                    <div className="flex items-center gap-3">
-                                        <Slider
-                                            label="Força"
-                                            value={styleStrength}
-                                            min={10} max={100}
-                                            onChange={(e) => setStyleStrength(Number(e.target.value))}
-                                            'aria-label'="Força do estilo"
-                                            sliderWidthClass='w-full'
-                                        />
-                                        <span className="text-sm font-semibold text-zinc-400 w-10 text-right">{styleStrength}%</span>
-                                    </div>
-                                </PanelSection>
-                            )}
+            <aside className="app-toolbar bg-zinc-900 border-r border-zinc-800 flex flex-col items-center p-2 space-y-2">
+                {mode === 'create' && CREATE_FUNCTIONS.map(f => <ToolbarButton key={f.id} data-function={f.id} name={f.name} icon={f.icon} isActive={activeCreateFunction === f.id} onClick={() => handleCreateFunctionClick(f.id)} />)}
+                {mode === 'edit' && EDIT_FUNCTIONS.map(f => <ToolbarButton key={f.id} data-function={f.id} name={f.name} icon={f.icon} isActive={activeEditFunction === f.id} onClick={() => handleEditFunctionClick(f.id)} />)}
+                {mode === 'video' && VIDEO_FUNCTIONS.map(f => <ToolbarButton key={f.id} data-function={f.id} name={f.name} icon={f.icon} isActive={activeVideoFunction === f.id} onClick={() => handleVideoFunctionClick(f.id)} />)}
+            </aside>
 
-                             {activeEditFunction === 'compose' && (
-                                <PanelSection title="Detecção de Objetos" icon={<Icons.Visibility />}>
-                                    <button 
-                                        onClick={handleDetectObjects} 
-                                        disabled={!generatedImage || isDetectingObjects}
-                                        className="w-full text-sm font-semibold py-2 px-3 bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-800 disabled:cursor-not-allowed rounded-md transition-colors flex items-center justify-center gap-2">
-                                        {isDetectingObjects ? <Icons.Spinner /> : <Icons.Visibility />}
-                                        {isDetectingObjects ? 'Detectando...' : 'Detectar Objetos'}
-                                    </button>
-                                    {detectedObjects.length > 0 && (
-                                        <div className="max-h-32 overflow-y-auto space-y-1 pr-2 mt-2">
-                                            {detectedObjects.map(obj => (
-                                                <button 
-                                                    key={obj.name}
-                                                    onClick={() => handleGenerateObjectMask(obj)}
-                                                    onMouseEnter={() => setHighlightedObject(obj)}
-                                                    onMouseLeave={() => setHighlightedObject(null)}
-                                                    className="w-full text-left text-xs p-2 rounded-md bg-zinc-800 hover:bg-zinc-700 focus:ring-1 focus:ring-blue-500 outline-none"
-                                                >
-                                                    {obj.name}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    )}
-                                </PanelSection>
-                            )}
-                            <PanelSection title="Filtros Rápidos" icon={<Icons.Filter />} defaultOpen={false}>
-                                <div className="grid grid-cols-3 gap-2">
-                                    {FILTERS.map(filter => (
-                                        <button
-                                            key={filter.name}
-                                            onClick={() => applyFilter(filter.prompt)}
-                                            disabled={!generatedImage || isLoading}
-                                            className="text-xs font-semibold p-2 bg-zinc-800 hover:bg-zinc-700 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                            title={filter.prompt}
-                                        >
-                                            {filter.name}
-                                        </button>
-                                    ))}
-                                </div>
-                            </PanelSection>
-                        </>
+            <main
+                ref={mainContentRef}
+                className="app-main flex flex-col bg-zinc-950 overflow-hidden"
+                onDragEnter={mode === 'edit' ? handleDragEnter : undefined}
+                onDragOver={mode === 'edit' ? handleDragOver : undefined}
+                onDragLeave={mode === 'edit' ? handleDragLeave : undefined}
+                onDrop={mode === 'edit' ? handleDrop : undefined}
+            >
+                <div className="flex-1 p-4 overflow-hidden relative">
+                    <MainContentDisplay />
+                    {isDragging && (
+                         <div className="absolute inset-4 border-4 border-dashed border-blue-500 bg-blue-500/10 rounded-lg flex items-center justify-center pointer-events-none">
+                             <div className="text-center">
+                                 <Icons.UploadCloud className="text-5xl text-blue-400" />
+                                 <p className="mt-2 text-lg font-semibold text-blue-300">Solte a imagem para editar</p>
+                             </div>
+                         </div>
+                     )}
+                </div>
+                <footer className="h-8 bg-zinc-900 border-t border-zinc-800 shrink-0 flex items-center justify-between px-4 text-xs text-zinc-400">
+                    <div>
+                        {currentImageDimensions && <span>{Math.round(currentImageDimensions.w * zoom)} x {Math.round(currentImageDimensions.h * zoom)} px</span>}
+                    </div>
+                    {generatedImage && (
+                        <div className="flex items-center gap-2">
+                            <button onClick={() => handleZoom(1 / 1.25)} title="Reduzir Zoom" className="p-1 rounded-md hover:bg-zinc-700 disabled:opacity-50" disabled={isLoading || zoom <= 0.1}>
+                                <Icons.ZoomOut className="!text-lg" />
+                            </button>
+                            <button onClick={handleFitToScreen} className="w-14 text-center text-sm font-mono rounded hover:bg-zinc-700 p-1" title="Ajustar à Tela">
+                                {Math.round(zoom * 100)}%
+                            </button>
+                            <button onClick={() => handleZoom(1.25)} title="Aumentar Zoom" className="p-1 rounded-md hover:bg-zinc-700 disabled:opacity-50" disabled={isLoading || zoom >= 5}>
+                                <Icons.ZoomIn className="!text-lg" />
+                            </button>
+                             <button onClick={handleFitToScreen} title="Ajustar à Tela" className="p-1 rounded-md hover:bg-zinc-700 disabled:opacity-50" disabled={isLoading || isFitToScreen}>
+                                <Icons.FitScreen className="!text-lg" />
+                            </button>
+                        </div>
                     )}
+                </footer>
+            </main>
+
+            <aside className="app-sidebar bg-zinc-900 border-l border-zinc-800 flex flex-col">
+                <div className="flex-1 overflow-y-auto">
+                    <PanelSection title="Prompt" icon={<Icons.Prompt />}>
+                         <form onSubmit={handleSubmit} className="space-y-3">
+                            <textarea
+                                ref={textareaRef} value={prompt} onChange={(e) => setPrompt(e.target.value)}
+                                placeholder={ mode === 'create' ? "Um astronauta surfando em um anel de saturno..." : mode === 'edit' ? "Adicione um chapéu de cowboy na pessoa..." : "Um close-up de uma gota de chuva..." }
+                                rows={3} className="w-full bg-zinc-800 rounded-md p-2 text-sm text-zinc-300 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none transition-shadow" disabled={isLoading}
+                            />
+                             {(mode === 'create' || mode === 'edit') && (
+                                <textarea
+                                    ref={negativeTextareaRef} value={negativePrompt} onChange={(e) => setNegativePrompt(e.target.value)}
+                                    placeholder="Prompt Negativo: evite baixa qualidade, texto..."
+                                    rows={2} className="w-full bg-zinc-800 rounded-md p-2 text-sm text-zinc-300 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none transition-shadow" disabled={isLoading}
+                                />
+                            )}
+                             <button type="submit" disabled={isLoading || (!prompt && mode !== 'edit')} className="w-full flex items-center justify-center gap-2 py-2.5 px-3 bg-blue-600 rounded-md text-white font-semibold hover:bg-blue-500 transition-colors disabled:bg-zinc-700 disabled:cursor-not-allowed">
+                                 {isLoading ? <Icons.Spinner /> : <Icons.Sparkles className="!text-lg" />}
+                                 <span>Gerar</span>
+                             </button>
+                        </form>
+                         {error && <div className="mt-2 p-2 bg-red-900/50 border border-red-800 text-red-300 text-xs rounded-md flex items-start gap-2"><Icons.AlertCircle className="shrink-0 mt-0.5 !text-base" /><span>{error}</span><button onClick={() => setError(null)} className="ml-auto p-0.5 text-red-300 hover:text-white"><Icons.Close className="!text-base" /></button></div>}
+                    </PanelSection>
                     
-                    {mode === 'video' && (
-                         <>
-                            <PanelSection title="Função de Vídeo" icon={<Icons.Video />}>
-                               <div className="grid grid-cols-2 gap-2">
-                                    <FunctionButton data-function="prompt" isActive={activeVideoFunction === 'prompt'} onClick={handleVideoFunctionClick} icon={<Icons.Prompt />} name="Prompt" />
-                                    <FunctionButton data-function="animation" isActive={activeVideoFunction === 'animation'} onClick={handleVideoFunctionClick} icon={<Icons.Start />} name="Animação" />
-                                </div>
-                            </PanelSection>
-                            
-                             {activeVideoFunction === 'animation' && (
-                                 <PanelSection title="Imagem Inicial" icon={<Icons.Image />}>
-                                     <div className="h-32">
-                                         <ImageUploadSlot
-                                            id="start-frame-upload"
-                                            label="Imagem Inicial"
-                                            icon={<Icons.UploadCloud className="text-3xl" />}
-                                            imagePreviewUrl={startFramePreview}
-                                            onUpload={(file) => processSingleFile(file, (img, url) => { setStartFrame(img); setStartFramePreview(url); })}
-                                            onRemove={handleRemoveStartFrame}
-                                        />
-                                     </div>
-                                 </PanelSection>
-                             )}
+                    <PanelSection title="Configurações" icon={<Icons.Settings />} defaultOpen={mode !== 'edit'}>
+                         {mode === 'create' && (
+                            <div className="space-y-3">
+                                {styleOptions[activeCreateFunction].length > 0 && (<div className="custom-select-wrapper"> <select value={styleModifier} onChange={(e) => setStyleModifier(e.target.value)} className="custom-select" aria-label="Estilo"><option value="default" disabled>Selecione um Estilo</option>{styleOptions[activeCreateFunction].map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></div>)}
+                                <div className="custom-select-wrapper"><select value={aspectRatio} onChange={(e) => setAspectRatio(e.target.value)} className="custom-select" aria-label="Proporção">{ALL_SUPPORTED_ASPECT_RATIOS.map((group) => (<optgroup label={group.label} key={group.label}>{group.options.map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}</optgroup>))}</select></div>
+                                {activeCreateFunction === 'comic' && (<div className="flex items-center gap-1 bg-zinc-800 p-1 rounded-md"><button onClick={() => setComicColorPalette('vibrant')} className={`w-1/2 text-center text-xs font-semibold py-1 rounded ${comicColorPalette === 'vibrant' ? 'bg-zinc-600' : ''}`}>Vibrante</button><button onClick={() => setComicColorPalette('noir')} className={`w-1/2 text-center text-xs font-semibold py-1 rounded ${comicColorPalette === 'noir' ? 'bg-zinc-600' : ''}`}>Noir</button></div>)}
+                                {(activeCreateFunction === 'free' || activeCreateFunction === 'comic') && (<><div className="custom-select-wrapper"><label className="block text-xs font-medium text-zinc-400 mb-1">Ângulo da Câmera</label><select value={cameraAngle} onChange={(e) => setCameraAngle(e.target.value)} className="custom-select">{cameraAngleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></div><div className="custom-select-wrapper"><label className="block text-xs font-medium text-zinc-400 mb-1">Iluminação</label><select value={lightingStyle} onChange={(e) => setLightingStyle(e.target.value)} className="custom-select">{lightingStyleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></div></>)}
+                            </div>
+                        )}
+                        {mode === 'edit' && activeEditFunction === 'style' && (
+                             <div className="flex items-center gap-3">
+                                <Slider label="Força" value={styleStrength} min={10} max={100} onChange={(e) => setStyleStrength(Number(e.target.value))} 'aria-label'="Força do estilo" sliderWidthClass='w-full' />
+                                <span className="text-sm font-semibold text-zinc-400 w-10 text-right">{styleStrength}%</span>
+                             </div>
+                        )}
+                        {mode === 'edit' && activeEditFunction === 'compose' && (
+                             <button onClick={handleDetectObjects} disabled={!generatedImage || isDetectingObjects} className="w-full text-sm font-semibold py-2 px-3 bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-800 disabled:cursor-not-allowed rounded-md transition-colors flex items-center justify-center gap-2">
+                                {isDetectingObjects ? <Icons.Spinner /> : <Icons.Visibility />} {isDetectingObjects ? 'Detectando...' : 'Detectar Objetos'}
+                             </button>
+                        )}
+                        {mode === 'video' && activeVideoFunction === 'animation' && (
+                           <ImageUploadSlot id="start-frame-upload" label="Imagem Inicial" icon={<Icons.UploadCloud className="text-3xl" />} imagePreviewUrl={startFramePreview} onUpload={(file) => processSingleFile(file, (img, url) => { setStartFrame(img); setStartFramePreview(url); })} onRemove={() => {setStartFrame(null); setStartFramePreview(null);}} className="h-32" />
+                        )}
+                         {!isLoading && mode === 'edit' && !generatedImage && (
+                             <p className="text-xs text-zinc-500 text-center">Arraste uma imagem para a área de trabalho para começar.</p>
+                         )}
+                    </PanelSection>
+                    
+                     {mode === 'edit' && (
+                        <>
+                        <PanelSection title="Camadas de Referência" icon={<Icons.Reference />}>
+                            {activeEditFunction === 'compose' ? (
+                                <>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {referenceImages.slice(0, 6).map((ref, index) => (
+                                            <div key={index} className="relative group w-full aspect-square bg-zinc-800 rounded-md overflow-hidden">
+                                                <img src={ref.previewUrl} alt={`Referência ${index + 1}`} className="w-full h-full object-contain" />
+                                                <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button onClick={() => setPlacingImageIndex(index)} className="p-1.5 bg-zinc-900/80 text-blue-400 rounded-full hover:bg-zinc-700" title="Posicionar"><Icons.AddPhoto /></button>
+                                                    <button onClick={() => handleRemoveReferenceImage(index)} className="p-1.5 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700" title="Remover"><Icons.Close /></button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {referenceImages.length < 6 && <ImageUploadSlot id="ref-upload-compose" label="" icon={<Icons.Add />} imagePreviewUrl={null} onUpload={(file) => processSingleFile(file, (img, url) => setReferenceImages(prev => [...prev, { image: img, previewUrl: url, mask: null }]))} onRemove={() => {}} className="aspect-square" />}
+                                    </div>
+                                    <button onClick={() => editorRef.current?.clearMask()} className="w-full text-xs font-semibold py-1.5 mt-2 bg-zinc-800 hover:bg-zinc-700 rounded-md flex items-center justify-center gap-1.5"><Icons.Deselect className="!text-sm" /> Limpar Objetos</button>
+                                    {detectedObjects.length > 0 && (
+                                        <div className="max-h-24 overflow-y-auto space-y-1 pr-1 mt-2 border-t border-zinc-800 pt-2">{detectedObjects.map(obj => (<button key={obj.name} onClick={() => handleGenerateObjectMask(obj)} onMouseEnter={() => setHighlightedObject(obj)} onMouseLeave={() => setHighlightedObject(null)} className="w-full text-left text-xs p-1.5 rounded-md bg-zinc-800 hover:bg-zinc-700">{obj.name}</button>))}</div>
+                                    )}
+                                </>
+                            ) : (
+                                <ImageUploadSlot id="ref-upload-style" label="Estilo" icon={<Icons.UploadCloud className="text-3xl" />} imagePreviewUrl={referenceImages[0]?.previewUrl || null} onUpload={(file) => processSingleFile(file, (img, url) => { setReferenceImages([{ image: img, previewUrl: url, mask: null }]); setIsAnalyzingStyle(true); analyzeImageStyle(img).then(desc => setPrompt(desc)).catch(() => setError("Falha ao analisar estilo.")).finally(() => setIsAnalyzingStyle(false)); })} onRemove={() => handleRemoveReferenceImage(0)} className="h-32" />
+                            )}
+                            {isAnalyzingStyle && <div className="text-xs text-zinc-400 mt-2 flex items-center"><Icons.Spinner className="mr-2"/>Analisando estilo...</div>}
+                        </PanelSection>
+                        <PanelSection title="Filtros Rápidos" icon={<Icons.Filter />} defaultOpen={false}>
+                            <div className="grid grid-cols-2 gap-2">{FILTERS.map(filter => (<button key={filter.name} onClick={() => applyFilter(filter.prompt)} disabled={!generatedImage || isLoading} className="text-xs font-semibold p-2 bg-zinc-800 hover:bg-zinc-700 rounded-md disabled:opacity-50" title={filter.prompt}>{filter.name}</button>))}</div>
+                        </PanelSection>
                         </>
-                    )}
+                     )}
 
-                    {/* History Panel */}
-                    {history.length > 1 && (
-                         <PanelSection title="Histórico" icon={<Icons.History />} defaultOpen={false}>
+                    {history.length > 0 && (
+                         <PanelSection title="Histórico" icon={<Icons.History />} defaultOpen={true}>
                              <div className="grid grid-cols-4 gap-2">
                                  {history.map((entry, index) => (
-                                     <button
-                                         key={entry.id}
-                                         onClick={() => handleHistoryNavigation(index)}
-                                         className={`relative w-full aspect-square rounded-md overflow-hidden ring-2 transition-all duration-200
-                                            ${index === historyIndex ? 'ring-blue-500' : 'ring-transparent hover:ring-zinc-600'}`}
-                                     >
-                                        {(entry.imageUrl || entry.startFramePreviewUrl) && (
-                                             <img 
-                                                src={entry.imageUrl || entry.startFramePreviewUrl} 
-                                                alt={`History ${index + 1}`} 
-                                                className="w-full h-full object-cover" 
-                                            />
-                                        )}
-                                        {entry.videoUrl && (
-                                            <div className="w-full h-full bg-black flex items-center justify-center">
-                                                <Icons.Video className="text-zinc-500" />
-                                            </div>
-                                        )}
+                                     <button key={entry.id} onClick={() => handleHistoryNavigation(index)} className={`relative w-full aspect-square rounded-md overflow-hidden ring-2 transition-all ${index === historyIndex ? 'ring-blue-500' : 'ring-transparent hover:ring-zinc-600'}`}>
+                                        {(entry.imageUrl || entry.startFramePreviewUrl) && <img src={entry.imageUrl || entry.startFramePreviewUrl} alt={`History ${index + 1}`} className="w-full h-full object-cover" />}
+                                        {entry.videoUrl && <div className="w-full h-full bg-black flex items-center justify-center"><Icons.Video className="text-zinc-500" /></div>}
                                          <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent"></div>
-                                         <span className="absolute bottom-1 right-1 text-xs font-bold text-white bg-black/50 px-1 rounded">
-                                             {index + 1}
-                                         </span>
+                                         <span className="absolute bottom-0.5 right-1 text-xs font-bold text-white bg-black/50 px-1 rounded">{index + 1}</span>
                                      </button>
                                  ))}
                              </div>
                          </PanelSection>
                      )}
                 </div>
-
-                {/* Prompt Bar */}
-                <div className="p-3 border-t border-zinc-800 shrink-0">
-                    <form onSubmit={handleSubmit} className="space-y-2">
-                        {(mode === 'create' || mode === 'edit') && (
-                            <textarea
-                                ref={negativeTextareaRef}
-                                value={negativePrompt}
-                                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setNegativePrompt(e.target.value)}
-                                placeholder="Prompt Negativo: evite baixa qualidade, texto, assinaturas..."
-                                rows={1}
-                                className="w-full bg-zinc-800 rounded-lg p-3 text-sm text-zinc-300 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-600 resize-none transition-shadow"
-                                disabled={isLoading}
-                            />
-                        )}
-
-                        <textarea
-                            ref={textareaRef}
-                            value={prompt}
-                            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setPrompt(e.target.value)}
-                            placeholder={
-                                mode === 'create' ? "Um astronauta surfando em um anel de saturno, estilo synthwave..." :
-                                mode === 'edit' ? "Adicione um chapéu de cowboy na pessoa..." :
-                                "Um close-up cinematográfico de uma gota de chuva caindo em uma folha..."
-                            }
-                            rows={1}
-                            className="w-full bg-zinc-800 rounded-lg p-3 text-zinc-200 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-600 resize-none transition-shadow"
-                            disabled={isLoading}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter' && !e.shiftKey) {
-                                    e.preventDefault();
-                                    if (!isLoading && (prompt || mode === 'edit')) {
-                                        handleSubmit(e as any);
-                                    }
-                                }
-                            }}
-                        />
-
-                        <button
-                            type="submit"
-                            disabled={isLoading || (!prompt && mode !== 'edit')}
-                            className="w-full flex items-center justify-center gap-2 p-3 bg-blue-600 rounded-lg text-white font-semibold hover:bg-blue-500 transition-colors disabled:bg-zinc-700 disabled:text-zinc-400 disabled:cursor-not-allowed"
-                            title="Gerar (Enter)"
-                        >
-                            {isLoading ? <Icons.Spinner /> : <Icons.Send />}
-                            <span>Gerar</span>
-                        </button>
-
-                    </form>
-                    {error && (
-                        <div className="mt-2 p-2 bg-red-900/50 border border-red-800 text-red-300 text-sm rounded-md flex items-center gap-2">
-                            <Icons.AlertCircle />
-                            <span>{error}</span>
-                            <button onClick={() => setError(null)} className="ml-auto p-1 text-red-300 hover:text-white"><Icons.Close /></button>
-                        </div>
-                    )}
-                </div>
             </aside>
-
-            {/* Main Content */}
-            <main
-                ref={mainContentRef}
-                className="flex-1 flex flex-col bg-zinc-950 overflow-hidden"
-                onDragEnter={(e) => mode === 'edit' && handleDragEnter(e, 'main')}
-                onDragOver={mode === 'edit' ? handleDragOver : undefined}
-                onDragLeave={mode === 'edit' ? handleDragLeave : undefined}
-                onDrop={(e) => mode === 'edit' && handleDrop(e, 'main')}
-            >
-                {/* Main Viewport Header */}
-                <div className="p-2 flex items-center justify-between border-b border-zinc-800 shrink-0 min-h-[45px]">
-                    <div className="flex items-center gap-2">
-                        {isEditing && currentImageAspectRatio && (
-                            <span className="text-sm text-zinc-400 ml-2 py-1 px-2 bg-zinc-800 rounded-md">
-                                {currentImageAspectRatio}
-                            </span>
-                        )}
-                    </div>
-                     <div className="flex items-center gap-2">
-                        {isEditing && (
-                            <button 
-                                onClick={handleClearAllImages}
-                                disabled={history.length === 0}
-                                className="text-sm font-medium py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                <Icons.ClearAll /> Limpar
-                            </button>
-                        )}
-                        {(generatedImage || generatedVideo) && (
-                             <a
-                                href={generatedImage || generatedVideo || '#'}
-                                download={`nanobanana-${Date.now()}.${generatedImage ? 'png' : 'mp4'}`}
-                                className="text-sm font-medium py-1.5 px-3 bg-blue-600 hover:bg-blue-500 text-white rounded-md transition-colors flex items-center gap-2"
-                             >
-                                 <Icons.Save /> Salvar
-                             </a>
-                         )}
-                     </div>
-                </div>
-
-                <div className="flex-1 p-4 overflow-hidden relative"
-                >
-                    <MainContentDisplay />
-                    {isDragging && dragTarget === 'main' && (
-                         <div className="absolute inset-4 border-4 border-dashed border-blue-500 bg-blue-500/10 rounded-lg flex items-center justify-center pointer-events-none">
-                             <div className="text-center">
-                                 <Icons.UploadCloud className="text-5xl text-blue-400" />
-                                 <p className="mt-2 text-lg font-semibold text-blue-300">Solte a imagem aqui</p>
-                             </div>
-                         </div>
-                     )}
-                </div>
-
-            </main>
-        </div>
+        </>
     );
 }
