@@ -101,7 +101,6 @@ interface ImageEditorRef {
   getOriginalImageSize: () => { width: number, height: number } | null;
   clearMask: () => void;
   clearOverlays: () => void;
-  stampObjectOnMask: (data: { previewUrl: string, placerTransform: any, maskOpacity: number }) => void;
 }
 
 const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeEditFunction, detectedObjects, highlightedObject, zoom }, ref) => {
@@ -112,7 +111,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
     const originalImageSizeRef = useRef<{ width: number, height: number }>({ width: 0, height: 0 });
     const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
     const panRef = useRef({ isPanning: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 });
-
+    
     const clearOverlays = useCallback(() => {
         const canvas = overlayCanvasRef.current;
         if (canvas) {
@@ -137,19 +136,15 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
             originalImageSizeRef.current = { width: image.width, height: image.height };
             setImageDimensions({ width: image.width, height: image.height });
             
-            const imageCanvas = imageCanvasRef.current;
-            const maskCanvas = maskCanvasRef.current;
-            const overlayCanvas = overlayCanvasRef.current;
-            if (!imageCanvas || !maskCanvas || !overlayCanvas) return;
+            const canvases = [imageCanvasRef.current, maskCanvasRef.current, overlayCanvasRef.current];
+            canvases.forEach(canvas => {
+                if(canvas) {
+                    canvas.width = image.width;
+                    canvas.height = image.height;
+                }
+            });
 
-            imageCanvas.width = image.width;
-            imageCanvas.height = image.height;
-            maskCanvas.width = image.width;
-            maskCanvas.height = image.height;
-            overlayCanvas.width = image.width;
-            overlayCanvas.height = image.height;
-
-            const ctx = imageCanvas.getContext('2d');
+            const ctx = imageCanvasRef.current?.getContext('2d');
             ctx?.drawImage(image, 0, 0);
             clearMask();
             clearOverlays();
@@ -191,7 +186,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
             ctx.fillStyle = isHighlighted ? '#facc15' : '#3b82f6';
             ctx.fillRect(x, y - (textHeight + padding), textWidth + padding * 2, textHeight + padding);
             
-            ctx.fillStyle = '#18181b';
+            ctx.fillStyle = '#1818b0';
             ctx.fillText(label, x + padding, y - (padding / 2) + 1);
         });
 
@@ -268,70 +263,16 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
             },
             clearMask,
             clearOverlays,
-            stampObjectOnMask: (data) => {
-                const maskCanvas = maskCanvasRef.current;
-                const container = containerRef.current;
-                if (!maskCanvas || !container) return;
-
-                const ctx = maskCanvas.getContext('2d');
-                if (!ctx) return;
-                
-                const { placerTransform } = data;
-                
-                const leftOffset = Math.max(0, (container.clientWidth - imageDimensions.width * zoom) / 2);
-                const topOffset = Math.max(0, (container.clientHeight - imageDimensions.height * zoom) / 2);
-
-                const canvasX = (container.scrollLeft + placerTransform.x - leftOffset) / zoom;
-                const canvasY = (container.scrollTop + placerTransform.y - topOffset) / zoom;
-                const canvasWidth = placerTransform.width / zoom;
-                const canvasHeight = placerTransform.height / zoom;
-                
-                const img = new Image();
-                img.crossOrigin = "anonymous";
-                img.onload = () => {
-                    const tempStampCanvas = document.createElement('canvas');
-                    tempStampCanvas.width = maskCanvas.width;
-                    tempStampCanvas.height = maskCanvas.height;
-                    const tempCtx = tempStampCanvas.getContext('2d');
-                    if (!tempCtx) return;
-
-                    tempCtx.save();
-                    tempCtx.translate(canvasX + canvasWidth / 2, canvasY + canvasHeight / 2);
-                    tempCtx.rotate((placerTransform.rotation * Math.PI) / 180);
-                    tempCtx.drawImage(img, -canvasWidth / 2, -canvasHeight / 2, canvasWidth, canvasHeight);
-                    tempCtx.restore();
-
-                    const imageData = tempCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-                    const pixelData = imageData.data;
-                    for (let i = 0; i < pixelData.length; i += 4) {
-                        if (pixelData[i + 3] > 0) {
-                            pixelData[i] = 74;
-                            pixelData[i + 1] = 222;
-                            pixelData[i + 2] = 128;
-                            pixelData[i + 3] = Math.round(255 * data.maskOpacity);
-                        }
-                    }
-                    tempCtx.putImageData(imageData, 0, 0);
-                    
-                    ctx.drawImage(tempStampCanvas, 0, 0);
-                };
-                img.src = data.previewUrl;
-            },
         };
     });
     
     const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
         const container = containerRef.current;
-        if (!container || (container.scrollWidth <= container.clientWidth && container.scrollHeight <= container.clientHeight)) {
-            return;
-        }
+        if (!container || (container.scrollWidth <= container.clientWidth && container.scrollHeight <= container.clientHeight)) return;
         e.preventDefault();
         panRef.current = {
-            isPanning: true,
-            startX: e.pageX - container.offsetLeft,
-            startY: e.pageY - container.offsetTop,
-            scrollLeft: container.scrollLeft,
-            scrollTop: container.scrollTop,
+            isPanning: true, startX: e.pageX - container.offsetLeft, startY: e.pageY - container.offsetTop,
+            scrollLeft: container.scrollLeft, scrollTop: container.scrollTop,
         };
         container.style.cursor = 'grabbing';
     };
@@ -372,10 +313,11 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
              onMouseMove={handleMouseMove}
         >
             <div 
+                data-canvas-wrapper="true"
                 className="relative shrink-0"
                 style={{
                     width: imageDimensions.width * zoom,
-                    height: imageDimensions.height * zoom
+                    height: imageDimensions.height * zoom,
                 }}
             >
                 <canvas ref={imageCanvasRef} className="absolute top-0 left-0 w-full h-full" />
@@ -567,7 +509,6 @@ export default function App() {
     const [detectedObjects, setDetectedObjects] = useState<DetectedObject[]>([]);
     const [highlightedObject, setHighlightedObject] = useState<DetectedObject | null>(null);
     const [currentImageDimensions, setCurrentImageDimensions] = useState<{w: number, h: number} | null>(null);
-    const [placingImageIndex, setPlacingImageIndex] = useState<number | null>(null);
     
     const [activeVideoFunction, setActiveVideoFunction] = useState<VideoFunction>('prompt');
     const [startFrame, setStartFrame] = useState<UploadedImage | null>(null);
@@ -587,7 +528,6 @@ export default function App() {
         
     const editorRef = useRef<ImageEditorRef>(null);
     const mainContentRef = useRef<HTMLDivElement>(null);
-    const placerContainerRef = useRef<HTMLDivElement>(null);
     const dragCounter = useRef(0);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const negativeTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -595,178 +535,6 @@ export default function App() {
     const currentEntry = history[historyIndex] ?? null;
     const generatedImage = currentEntry?.imageUrl ?? null;
     const generatedVideo = currentEntry?.videoUrl ?? null;
-
-    const ObjectPlacer: React.FC<{
-        src: string;
-        containerRef: React.RefObject<HTMLDivElement>;
-        onConfirm: (transform: { x: number; y: number; width: number; height: number; rotation: number; }) => void;
-        onCancel: () => void;
-    }> = ({ src, containerRef, onConfirm, onCancel }) => {
-        const [transform, setTransform] = useState({ x: 0, y: 0, width: 200, height: 200, rotation: 0 });
-        const [isLoaded, setIsLoaded] = useState(false);
-        const actionRef = useRef<{ 
-            type: 'move' | 'scale' | 'rotate'; 
-            startX: number; 
-            startY: number; 
-            startTransform: typeof transform; 
-            aspectRatio: number; 
-            centerX: number; 
-            centerY: number;
-            startMouseAngle?: number;
-            startDragDistance?: number;
-        } | null>(null);
-    
-        useEffect(() => {
-            const img = new Image();
-            img.src = src;
-            img.onload = () => {
-                const container = containerRef.current;
-                if (!container) return;
-    
-                const containerRect = container.getBoundingClientRect();
-                const MAX_DIM = Math.min(containerRect.width, containerRect.height) * 0.5;
-                const aspectRatio = img.width / img.height;
-                let width, height;
-                if (aspectRatio > 1) {
-                    width = MAX_DIM;
-                    height = MAX_DIM / aspectRatio;
-                } else {
-                    height = MAX_DIM;
-                    width = MAX_DIM * aspectRatio;
-                }
-                setTransform({
-                    width,
-                    height,
-                    x: (containerRect.width - width) / 2,
-                    y: (containerRect.height - height) / 2,
-                    rotation: 0,
-                });
-                setIsLoaded(true);
-            };
-        }, [src, containerRef]);
-    
-        const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>, type: 'move' | 'scale' | 'rotate') => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (!isLoaded) return;
-    
-            const containerRect = containerRef.current?.getBoundingClientRect();
-            if (!containerRect) return;
-
-            const centerX = transform.x + transform.width / 2;
-            const centerY = transform.y + transform.height / 2;
-
-            const mouseX = e.clientX - containerRect.left;
-            const mouseY = e.clientY - containerRect.top;
-
-            actionRef.current = {
-                type,
-                startX: e.clientX,
-                startY: e.clientY,
-                startTransform: { ...transform },
-                aspectRatio: transform.width / transform.height,
-                centerX,
-                centerY
-            };
-
-            if (type === 'rotate') {
-                actionRef.current.startMouseAngle = Math.atan2(mouseY - centerY, mouseX - centerX) * (180 / Math.PI);
-            } else if (type === 'scale') {
-                const dx = mouseX - centerX;
-                const dy = mouseY - centerY;
-                actionRef.current.startDragDistance = Math.sqrt(dx * dx + dy * dy);
-            }
-    
-            window.addEventListener('mousemove', handleMouseMove);
-            window.addEventListener('mouseup', handleMouseUp);
-        };
-    
-        const handleMouseMove = (e: MouseEvent) => {
-            if (!actionRef.current) return;
-            
-            const containerRect = containerRef.current?.getBoundingClientRect();
-            if (!containerRect) return;
-    
-            const { type, startTransform, centerX, centerY } = actionRef.current;
-    
-            if (type === 'move') {
-                const dx = e.clientX - actionRef.current.startX;
-                const dy = e.clientY - actionRef.current.startY;
-                setTransform(t => ({ ...t, x: startTransform.x + dx, y: startTransform.y + dy }));
-            } else if (type === 'rotate') {
-                const mouseX = e.clientX - containerRect.left;
-                const mouseY = e.clientY - containerRect.top;
-                const currentMouseAngle = Math.atan2(mouseY - centerY, mouseX - centerX) * (180 / Math.PI);
-                const startMouseAngle = actionRef.current.startMouseAngle || 0;
-                const angleDiff = currentMouseAngle - startMouseAngle;
-                setTransform(t => ({ ...t, rotation: startTransform.rotation + angleDiff }));
-            } else if (type === 'scale') {
-                const mouseX = e.clientX - containerRect.left;
-                const mouseY = e.clientY - containerRect.top;
-                const dx = mouseX - centerX;
-                const dy = mouseY - centerY;
-                const currentDragDistance = Math.sqrt(dx * dx + dy * dy);
-                const startDragDistance = actionRef.current.startDragDistance || 1;
-                
-                const scaleFactor = currentDragDistance / startDragDistance;
-
-                const newWidth = startTransform.width * scaleFactor;
-                const newHeight = startTransform.height * scaleFactor;
-
-                setTransform(t => ({
-                    ...t,
-                    width: Math.max(20, newWidth),
-                    height: Math.max(20, newHeight),
-                    x: centerX - newWidth / 2,
-                    y: centerY - newHeight / 2,
-                }));
-            }
-        };
-    
-        const handleMouseUp = () => {
-            actionRef.current = null;
-            window.removeEventListener('mousemove', handleMouseMove);
-            window.removeEventListener('mouseup', handleMouseUp);
-        };
-    
-        if (!isLoaded) return null;
-    
-        return (
-            <div className="absolute inset-0 z-30 pointer-events-none">
-                <div
-                    className="absolute border-2 border-blue-500 border-dashed pointer-events-auto"
-                    style={{
-                        left: transform.x,
-                        top: transform.y,
-                        width: transform.width,
-                        height: transform.height,
-                        transform: `rotate(${transform.rotation}deg)`,
-                    }}
-                    onMouseDown={(e) => handleMouseDown(e, 'move')}
-                >
-                    <img src={src} className="w-full h-full object-contain" alt="Object to place" draggable="false" />
-                    <div onMouseDown={(e) => handleMouseDown(e, 'scale')} className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-white rounded-full cursor-nwse-resize border-2 border-blue-500"></div>
-                    <div onMouseDown={(e) => handleMouseDown(e, 'scale')} className="absolute -bottom-1.5 -right-1.5 w-4 h-4 bg-white rounded-full cursor-nesw-resize border-2 border-blue-500"></div>
-                    <div onMouseDown={(e) => handleMouseDown(e, 'scale')} className="absolute -bottom-1.5 -left-1.5 w-4 h-4 bg-white rounded-full cursor-nwse-resize border-2 border-blue-500"></div>
-                    <div onMouseDown={(e) => handleMouseDown(e, 'scale')} className="absolute -top-1.5 -left-1.5 w-4 h-4 bg-white rounded-full cursor-nesw-resize border-2 border-blue-500"></div>
-                    <div
-                        className="absolute -top-8 left-1/2 -translate-x-1/2 w-5 h-5 bg-white rounded-full cursor-grab flex items-center justify-center border-2 border-blue-500"
-                        onMouseDown={(e) => handleMouseDown(e, 'rotate')}
-                    >
-                       <Icons.RotateRight className="text-blue-600 !text-base" />
-                    </div>
-                </div>
-                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-zinc-900/80 backdrop-blur-sm p-2 rounded-lg shadow-lg flex items-center gap-2 ring-1 ring-white/10 pointer-events-auto">
-                    <button onClick={onCancel} className="px-3 py-1.5 text-sm font-semibold rounded-md bg-zinc-800 hover:bg-zinc-700 transition-colors flex items-center gap-1.5">
-                        <Icons.Close className="!text-base" /> Cancelar
-                    </button>
-                    <button onClick={() => onConfirm(transform)} className="px-3 py-1.5 text-sm font-semibold rounded-md bg-blue-600 hover:bg-blue-500 text-white transition-colors flex items-center gap-1.5">
-                        <Icons.Check className="!text-base" /> Aplicar
-                    </button>
-                </div>
-            </div>
-        );
-    };
 
     const styleOptions: Record<CreateFunction, { value: string, label: string }[]> = {
         free: [],
@@ -999,6 +767,13 @@ export default function App() {
             processMainImage(files[0]);
         }
     };
+
+    const handleMainImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files.length > 0) {
+            handleDropOnCanvas(e.target.files);
+            e.target.value = ''; // Reset file input
+        }
+    };
     
     const handleRemoveReferenceImage = (indexToRemove: number) => {
         setReferenceImages(prev => prev.filter((_, index) => index !== indexToRemove));
@@ -1058,7 +833,7 @@ export default function App() {
             setHighlightedObject(null);
         }
     };
-
+    
     const applyFilter = (filterPrompt: string) => {
         if (!generatedImage) { setError("Por favor, gere ou envie uma imagem primeiro para aplicar um filtro."); return; }
         setPrompt(filterPrompt); handleSubmit(new Event('submit') as any); 
@@ -1185,45 +960,52 @@ export default function App() {
         }
         if (generatedVideo) {
              return (
-                <div className="w-full h-full flex items-center justify-center p-4">
+                <div className="w-full flex-1 flex items-center justify-center">
                      <video key={generatedVideo} src={generatedVideo} controls autoPlay loop className="max-w-full max-h-full rounded-lg shadow-lg" />
                  </div>
              );
         }
         if (generatedImage) {
             return (
-                <div className="w-full h-full relative" ref={placerContainerRef}>
+                <div className="w-full flex-1 relative">
                     <ImageEditor
-                        ref={editorRef} key={generatedImage} src={generatedImage} activeEditFunction={mode === 'edit' ? activeEditFunction : null}
-                        detectedObjects={detectedObjects} highlightedObject={highlightedObject} zoom={zoom}
+                        ref={editorRef} key={generatedImage} src={generatedImage} 
+                        activeEditFunction={mode === 'edit' ? activeEditFunction : null}
+                        detectedObjects={detectedObjects} highlightedObject={highlightedObject} 
+                        zoom={zoom}
                     />
-                    {placingImageIndex !== null && referenceImages[placingImageIndex] && (
-                        <ObjectPlacer 
-                            src={referenceImages[placingImageIndex].maskedObjectPreviewUrl || referenceImages[placingImageIndex].previewUrl}
-                            containerRef={placerContainerRef}
-                            onCancel={() => setPlacingImageIndex(null)}
-                            onConfirm={(placerTransform) => {
-                                editorRef.current?.stampObjectOnMask({
-                                    previewUrl: referenceImages[placingImageIndex].maskedObjectPreviewUrl || referenceImages[placingImageIndex].previewUrl,
-                                    placerTransform, maskOpacity: 0.6,
-                                });
-                                setPlacingImageIndex(null);
-                            }}
-                        />
-                    )}
                 </div>
             );
         }
         return (
-             <div className="flex flex-col items-center justify-center h-full text-center text-zinc-500 p-8 border-2 border-dashed border-zinc-800 rounded-lg">
-                <Icons.Sparkles className="text-6xl text-zinc-700 mb-4" />
-                <h2 className="text-xl font-bold text-zinc-400 mb-2">Bem-vindo ao Nano Banana Studio</h2>
-                <p className="max-w-md">
-                   {mode === 'create' && "Selecione uma ferramenta à esquerda e descreva sua imagem no painel à direita."}
-                   {mode === 'edit' && "Arraste uma imagem para esta área para começar a editar."}
-                   {mode === 'video' && "Selecione uma ferramenta de vídeo e use o painel à direita para gerar."}
-                </p>
-            </div>
+            mode === 'edit' ? (
+                <>
+                    <input
+                        type="file"
+                        id="main-image-upload"
+                        className="hidden"
+                        accept="image/png, image/jpeg, image/webp"
+                        onChange={handleMainImageUpload}
+                        disabled={isLoading}
+                    />
+                    <label htmlFor="main-image-upload" className="flex flex-col items-center justify-center flex-1 text-center text-zinc-500 p-8 border-2 border-dashed border-zinc-800 rounded-lg cursor-pointer hover:border-blue-500 hover:text-blue-400 transition-colors duration-200 group">
+                        <Icons.Sparkles className="text-6xl text-zinc-700 mb-4 transition-colors group-hover:text-blue-500" />
+                        <h2 className="text-xl font-bold text-zinc-400 mb-2 transition-colors group-hover:text-blue-400">Bem-vindo ao Nano Banana Studio</h2>
+                        <p className="max-w-md">
+                            Arraste uma imagem ou clique nesta área para começar a editar.
+                        </p>
+                    </label>
+                </>
+            ) : (
+                <div className="flex flex-col items-center justify-center flex-1 text-center text-zinc-500 p-8 border-2 border-dashed border-zinc-800 rounded-lg">
+                    <Icons.Sparkles className="text-6xl text-zinc-700 mb-4" />
+                    <h2 className="text-xl font-bold text-zinc-400 mb-2">Bem-vindo ao Nano Banana Studio</h2>
+                    <p className="max-w-md">
+                       {mode === 'create' && "Selecione uma ferramenta à esquerda e descreva sua imagem no painel à direita."}
+                       {mode === 'video' && "Selecione uma ferramenta de vídeo e use o painel à direita para gerar."}
+                    </p>
+                </div>
+            )
         );
     };
 
@@ -1250,9 +1032,9 @@ export default function App() {
                         🍌
                     </button>
                     <div className="grid grid-cols-3 gap-1 bg-zinc-800 p-1 rounded-md">
-                         <button onClick={() => handleModeToggle('create')} className={`px-4 py-1 text-xs font-bold rounded ${mode === 'create' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700'}`}>CRIAR</button>
-                         <button onClick={() => handleModeToggle('edit')} className={`px-4 py-1 text-xs font-bold rounded ${mode === 'edit' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700'}`}>EDITAR</button>
-                         <button onClick={() => handleModeToggle('video')} className={`px-4 py-1 text-xs font-bold rounded ${mode === 'video' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700'}`}>VÍDEO</button>
+                         <button onClick={() => handleModeToggle('create')} className={`px-4 py-1 text-xs font-bold rounded ${mode === 'create' ? 'bg-blue-600 text-white' : 'hover:bg-zinc-700'}`}>CRIAR</button>
+                         <button onClick={() => handleModeToggle('edit')} className={`px-4 py-1 text-xs font-bold rounded ${mode === 'edit' ? 'bg-blue-600 text-white' : 'hover:bg-zinc-700'}`}>EDITAR</button>
+                         <button onClick={() => handleModeToggle('video')} className={`px-4 py-1 text-xs font-bold rounded ${mode === 'video' ? 'bg-blue-600 text-white' : 'hover:bg-zinc-700'}`}>VÍDEO</button>
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1274,13 +1056,13 @@ export default function App() {
 
             <main
                 ref={mainContentRef}
-                className="app-main flex flex-col bg-zinc-950 overflow-hidden"
+                className="app-main flex flex-col bg-zinc-950 overflow-hidden min-h-0"
                 onDragEnter={mode === 'edit' ? handleDragEnter : undefined}
                 onDragOver={mode === 'edit' ? handleDragOver : undefined}
                 onDragLeave={mode === 'edit' ? handleDragLeave : undefined}
                 onDrop={mode === 'edit' ? handleDrop : undefined}
             >
-                <div className="flex-1 p-4 overflow-hidden relative">
+                <div className="flex-1 p-4 overflow-hidden relative flex flex-col min-h-0">
                     <MainContentDisplay />
                     {isDragging && (
                          <div className="absolute inset-4 border-4 border-dashed border-blue-500 bg-blue-500/10 rounded-lg flex items-center justify-center pointer-events-none">
@@ -1320,11 +1102,14 @@ export default function App() {
                         {mode === 'create' && (
                             <div className="space-y-3">
                                 {styleOptions[activeCreateFunction].length > 0 && (
-                                    <div className="custom-select-wrapper">
-                                        <select value={styleModifier} onChange={(e) => setStyleModifier(e.target.value)} className="custom-select" aria-label="Estilo">
-                                            <option value="default" disabled>Selecione um Estilo</option>
-                                            {styleOptions[activeCreateFunction].map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                                        </select>
+                                    <div>
+                                        <label className="block text-xs font-medium text-zinc-400 mb-1">Estilo</label>
+                                        <div className="custom-select-wrapper">
+                                            <select value={styleModifier} onChange={(e) => setStyleModifier(e.target.value)} className="custom-select" aria-label="Estilo">
+                                                <option value="default" disabled>Selecione um Estilo</option>
+                                                {styleOptions[activeCreateFunction].map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                            </select>
+                                        </div>
                                     </div>
                                 )}
                                 <div>
@@ -1350,7 +1135,7 @@ export default function App() {
                                         <div>
                                             <label className="block text-xs font-medium text-zinc-400 mb-1">Ângulo da Câmera</label>
                                             <div className="custom-select-wrapper">
-                                                <select value={cameraAngle} onChange={(e) => setCameraAngle(e.target.value)} className="custom-select">
+                                                <select value={cameraAngle} onChange={(e) => setCameraAngle(e.target.value)} className="custom-select" aria-label="Ângulo da Câmera">
                                                     {cameraAngleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                                                 </select>
                                             </div>
@@ -1358,7 +1143,7 @@ export default function App() {
                                         <div>
                                             <label className="block text-xs font-medium text-zinc-400 mb-1">Iluminação</label>
                                             <div className="custom-select-wrapper">
-                                                <select value={lightingStyle} onChange={(e) => setLightingStyle(e.target.value)} className="custom-select">
+                                                <select value={lightingStyle} onChange={(e) => setLightingStyle(e.target.value)} className="custom-select" aria-label="Iluminação">
                                                     {lightingStyleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                                                 </select>
                                             </div>
@@ -1389,14 +1174,17 @@ export default function App() {
                      {mode === 'edit' && (
                         <>
                         <PanelSection title="Camadas de Referência" icon={<Icons.Reference />}>
-                            {activeEditFunction === 'compose' ? (
+                             {activeEditFunction === 'compose' ? (
                                 <>
                                     <div className="grid grid-cols-3 gap-2">
                                         {referenceImages.slice(0, 6).map((ref, index) => (
                                             <div key={index} className="relative group w-full aspect-square bg-zinc-800 rounded-md overflow-hidden">
-                                                <img src={ref.previewUrl} alt={`Referência ${index + 1}`} className="w-full h-full object-contain" />
+                                                {ref.isExtractingObject ? (
+                                                    <div className="w-full h-full flex items-center justify-center"><Icons.Spinner/></div>
+                                                ) : (
+                                                    <img src={ref.previewUrl} alt={`Referência ${index + 1}`} className="w-full h-full object-contain" />
+                                                )}
                                                 <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    <button onClick={() => setPlacingImageIndex(index)} className="p-1.5 bg-zinc-900/80 text-blue-400 rounded-full hover:bg-zinc-700" title="Posicionar"><Icons.AddPhoto /></button>
                                                     <button onClick={() => handleRemoveReferenceImage(index)} className="p-1.5 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700" title="Remover"><Icons.Close /></button>
                                                 </div>
                                             </div>
