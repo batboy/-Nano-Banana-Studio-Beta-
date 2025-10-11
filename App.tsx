@@ -742,7 +742,7 @@ export default function App() {
         reader.readAsDataURL(file);
     }, []);
     
-    const handleDropOnCanvas = (files: FileList) => {
+    const handleFileDropOnCanvas = (files: FileList) => {
         if (mode !== 'edit' || !files || files.length === 0) return;
 
         const processMainImage = (file: File) => {
@@ -770,7 +770,7 @@ export default function App() {
 
     const handleMainImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files.length > 0) {
-            handleDropOnCanvas(e.target.files);
+            handleFileDropOnCanvas(e.target.files);
             e.target.value = ''; // Reset file input
         }
     };
@@ -783,11 +783,127 @@ export default function App() {
     const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); };
     const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); dragCounter.current++; if (dragCounter.current === 1) setIsDragging(true); };
     const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); dragCounter.current--; if (dragCounter.current === 0) setIsDragging(false); };
-    const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault(); e.stopPropagation();
-        setIsDragging(false); dragCounter.current = 0;
-        if (e.dataTransfer.files) handleDropOnCanvas(e.dataTransfer.files);
+    
+    const handleDropComposition = async (refIndex: number, e: React.DragEvent<HTMLDivElement>) => {
+        if (!mainContentRef.current || !generatedImage || !editorRef.current) return;
+    
+        const referenceImage = referenceImages[refIndex];
+        if (!referenceImage) {
+            setError("Imagem de referência não encontrada.");
+            return;
+        }
+    
+        if (referenceImage.isMasking) {
+            setError("Aguarde a análise do objeto na imagem de referência terminar.");
+            return;
+        }
+    
+        if (!referenceImage.mask) {
+            setError("Não foi possível extrair um objeto da imagem de referência. Tente outra imagem.");
+            return;
+        }
+    
+        const canvasWrapper = mainContentRef.current.querySelector('[data-canvas-wrapper="true"]') as HTMLElement;
+        if (!canvasWrapper) return;
+        const canvasWrapperRect = canvasWrapper.getBoundingClientRect();
+    
+        if (
+            e.clientX < canvasWrapperRect.left || e.clientX > canvasWrapperRect.right ||
+            e.clientY < canvasWrapperRect.top || e.clientY > canvasWrapperRect.bottom
+        ) {
+            return; 
+        }
+    
+        const x = (e.clientX - canvasWrapperRect.left) + (canvasWrapper.parentElement?.scrollLeft || 0);
+        const y = (e.clientY - canvasWrapperRect.top) + (canvasWrapper.parentElement?.scrollTop || 0);
+    
+        const originalX = x / zoom;
+        const originalY = y / zoom;
+    
+        setIsLoading(true);
+        setLoadingMessage("Compondo as imagens...");
+        setError(null);
+    
+        try {
+            const originalSize = editorRef.current.getOriginalImageSize();
+            if (!originalSize) throw new Error("Não foi possível obter o tamanho da imagem original.");
+    
+            const maskImage = new Image();
+            maskImage.src = `data:${referenceImage.mask.mimeType};base64,${referenceImage.mask.base64}`;
+            await new Promise((resolve, reject) => {
+                maskImage.onload = resolve;
+                maskImage.onerror = reject;
+            });
+            
+            const destMaskCanvas = document.createElement('canvas');
+            destMaskCanvas.width = originalSize.width;
+            destMaskCanvas.height = originalSize.height;
+            const ctx = destMaskCanvas.getContext('2d');
+            if (!ctx) throw new Error("Não foi possível criar o contexto do canvas da máscara.");
+            
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, originalSize.width, originalSize.height);
+    
+            const drawX = originalX - maskImage.width / 2;
+            const drawY = originalY - maskImage.height / 2;
+            ctx.drawImage(maskImage, drawX, drawY);
+    
+            const destMaskDataUrl = destMaskCanvas.toDataURL('image/png');
+            const destMask: UploadedImage = {
+                base64: destMaskDataUrl.split(',')[1],
+                mimeType: 'image/png'
+            };
+    
+            const mainImageBase64 = generatedImage.split(',')[1];
+            const mainImageMimeType = generatedImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
+            const mainImage: UploadedImage = { base64: mainImageBase64, mimeType: mainImageMimeType };
+            
+            const compositionPrompt = `Usando a imagem de referência, coloque seu objeto principal na imagem principal no local indicado pela máscara de edição. Misture-o perfeitamente, ajustando iluminação, sombras, escala e perspectiva. O objeto da imagem de referência deve parecer pertencer naturalmente à cena principal.`;
+    
+            const resultImageUrl = await processImagesWithPrompt(
+                compositionPrompt, mainImage, [referenceImage], destMask, 'compose',
+                originalSize, styleStrength, negativePrompt
+            );
+            if (resultImageUrl.startsWith('A edição foi bloqueada')) { throw new Error(resultImageUrl); }
+    
+            const newHistoryEntry: HistoryEntry = {
+                id: `hist-${Date.now()}`, imageUrl: resultImageUrl, 
+                prompt: `Composição de imagem`,
+                negativePrompt, mode: 'edit', editFunction: 'compose',
+                referenceImages: [...referenceImages],
+            };
+    
+            setHistory(prev => {
+                const newHistory = prev.slice(0, historyIndex + 1);
+                newHistory.push(newHistoryEntry);
+                return newHistory;
+            });
+            setHistoryIndex(prev => prev + 1);
+            editorRef.current?.clearMask();
+            resetDetectionState();
+    
+        } catch (e: any) {
+            setError(e.message || "Ocorreu um erro durante a composição.");
+        } finally {
+            setIsLoading(false);
+        }
     };
+
+    const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(false);
+        dragCounter.current = 0;
+    
+        const jsonData = e.dataTransfer.getData('application/json');
+        if (jsonData) {
+            const { index } = JSON.parse(jsonData);
+            handleDropComposition(index, e);
+        } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            handleFileDropOnCanvas(e.dataTransfer.files);
+        }
+    };
+    
 
     const handleDetectObjects = async () => {
         if (!generatedImage || isDetectingObjects) return;
@@ -847,7 +963,7 @@ export default function App() {
         setLoadingMessage('Gerando sua banana especial...');
 
         try {
-            const easterEggPrompt = "Uma banana estilizada, de corpo inteiro, usando uma camiseta da seleção brasileira de futebol, em um fundo neutro.";
+            const easterEggPrompt = "Uma banana com faixas verde e amarela em volta dela.";
             
             const imageUrl = await generateImage(
                 easterEggPrompt,
@@ -1032,9 +1148,9 @@ export default function App() {
                         🍌
                     </button>
                     <div className="grid grid-cols-3 gap-1 bg-zinc-800 p-1 rounded-md">
-                         <button onClick={() => handleModeToggle('create')} className={`px-4 py-1 text-xs font-bold rounded ${mode === 'create' ? 'bg-blue-600 text-white' : 'hover:bg-zinc-700'}`}>CRIAR</button>
-                         <button onClick={() => handleModeToggle('edit')} className={`px-4 py-1 text-xs font-bold rounded ${mode === 'edit' ? 'bg-blue-600 text-white' : 'hover:bg-zinc-700'}`}>EDITAR</button>
-                         <button onClick={() => handleModeToggle('video')} className={`px-4 py-1 text-xs font-bold rounded ${mode === 'video' ? 'bg-blue-600 text-white' : 'hover:bg-zinc-700'}`}>VÍDEO</button>
+                         <button onClick={() => handleModeToggle('create')} className={`flex items-center justify-center px-4 py-1 text-xs font-bold rounded ${mode === 'create' ? 'bg-blue-600 text-white' : 'hover:bg-zinc-700'}`}>CRIAR</button>
+                         <button onClick={() => handleModeToggle('edit')} className={`flex items-center justify-center px-4 py-1 text-xs font-bold rounded ${mode === 'edit' ? 'bg-blue-600 text-white' : 'hover:bg-zinc-700'}`}>EDITAR</button>
+                         <button onClick={() => handleModeToggle('video')} className={`flex items-center justify-center px-4 py-1 text-xs font-bold rounded ${mode === 'video' ? 'bg-blue-600 text-white' : 'hover:bg-zinc-700'}`}>VÍDEO</button>
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1154,7 +1270,7 @@ export default function App() {
                         )}
                         {mode === 'edit' && activeEditFunction === 'style' && (
                              <div className="flex items-center gap-3">
-                                <Slider label="Força" value={styleStrength} min={10} max={100} onChange={(e) => setStyleStrength(Number(e.target.value))} 'aria-label'="Força do estilo" sliderWidthClass='w-full' />
+                                <Slider label="Força" value={styleStrength} min={10} max={100} onChange={(e) => setStyleStrength(Number(e.target.value))} aria-label="Força do estilo" sliderWidthClass='w-full' />
                                 <span className="text-sm font-semibold text-zinc-400 w-10 text-right">{styleStrength}%</span>
                              </div>
                         )}
@@ -1173,13 +1289,24 @@ export default function App() {
                     
                      {mode === 'edit' && (
                         <>
-                        <PanelSection title="Camadas de Referência" icon={<Icons.Reference />}>
+                        <PanelSection title="Referência" icon={<Icons.Reference />}>
                              {activeEditFunction === 'compose' ? (
                                 <>
                                     <div className="grid grid-cols-3 gap-2">
                                         {referenceImages.slice(0, 6).map((ref, index) => (
-                                            <div key={index} className="relative group w-full aspect-square bg-zinc-800 rounded-md overflow-hidden">
-                                                {ref.isExtractingObject ? (
+                                            <div 
+                                                key={index} 
+                                                className="relative group w-full aspect-square bg-zinc-800 rounded-md overflow-hidden"
+                                                draggable={mode === 'edit' && activeEditFunction === 'compose'}
+                                                onDragStart={mode === 'edit' && activeEditFunction === 'compose' ? (e) => {
+                                                    e.dataTransfer.setData('application/json', JSON.stringify({ index }));
+                                                    const img = e.currentTarget.querySelector('img');
+                                                    if (img) {
+                                                        e.dataTransfer.setDragImage(img, img.width / 2, img.height / 2);
+                                                    }
+                                                } : undefined}
+                                            >
+                                                {ref.isExtractingObject || ref.isMasking ? (
                                                     <div className="w-full h-full flex items-center justify-center"><Icons.Spinner/></div>
                                                 ) : (
                                                     <img src={ref.previewUrl} alt={`Referência ${index + 1}`} className="w-full h-full object-contain" />
@@ -1189,7 +1316,33 @@ export default function App() {
                                                 </div>
                                             </div>
                                         ))}
-                                        {referenceImages.length < 6 && <ImageUploadSlot id="ref-upload-compose" label="" icon={<Icons.Add />} imagePreviewUrl={null} onUpload={(file) => processSingleFile(file, (img, url) => setReferenceImages(prev => [...prev, { image: img, previewUrl: url, mask: null }]))} onRemove={() => {}} className="aspect-square" />}
+                                        {referenceImages.length < 6 && <ImageUploadSlot 
+                                            id="ref-upload-compose" 
+                                            label="" 
+                                            icon={<Icons.Add />} 
+                                            imagePreviewUrl={null} 
+                                            onUpload={(file) => processSingleFile(file, (img, url) => {
+                                                const newRef: ReferenceImage = { image: img, previewUrl: url, mask: null, isMasking: true };
+                                                const newIndex = referenceImages.length;
+                                                setReferenceImages(prev => [...prev, newRef]);
+                                        
+                                                generateObjectMask(img)
+                                                    .then(mask => {
+                                                        setReferenceImages(prev => prev.map((ref, index) => 
+                                                            index === newIndex ? { ...ref, mask: mask, isMasking: false } : ref
+                                                        ));
+                                                    })
+                                                    .catch(err => {
+                                                        console.error("Falha ao gerar a máscara automaticamente:", err);
+                                                        setError("Falha ao analisar o objeto da imagem de referência.");
+                                                        setReferenceImages(prev => prev.map((ref, index) => 
+                                                            index === newIndex ? { ...ref, isMasking: false } : ref
+                                                        ));
+                                                    });
+                                            })} 
+                                            onRemove={() => {}} 
+                                            className="aspect-square" 
+                                        />}
                                     </div>
                                     <button onClick={() => editorRef.current?.clearMask()} className="w-full text-xs font-semibold py-1.5 mt-2 bg-zinc-800 hover:bg-zinc-700 rounded-md flex items-center justify-center gap-1.5"><Icons.Deselect className="!text-sm" /> Limpar Objetos</button>
                                     {detectedObjects.length > 0 && (
@@ -1223,6 +1376,15 @@ export default function App() {
                      )}
                 </div>
                 <div className="shrink-0 border-t border-zinc-800">
+                    {(mode === 'create' || mode === 'edit') && (
+                        <PanelSection title="Prompt Negativo" icon={<Icons.Block />} defaultOpen={false}>
+                            <textarea
+                                ref={negativeTextareaRef} value={negativePrompt} onChange={(e) => setNegativePrompt(e.target.value)}
+                                placeholder="Evite baixa qualidade, texto, deformidades..."
+                                rows={2} className="w-full bg-zinc-800 rounded-md p-2 text-sm text-zinc-300 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none transition-shadow" disabled={isLoading}
+                            />
+                        </PanelSection>
+                    )}
                     <PanelSection title="Prompt" icon={<Icons.Prompt />} className="!border-b-0">
                          <form onSubmit={handleSubmit} className="space-y-3">
                             <textarea
@@ -1230,13 +1392,6 @@ export default function App() {
                                 placeholder={ mode === 'create' ? "Um astronauta surfando em um anel de saturno..." : mode === 'edit' ? "Adicione um chapéu de cowboy na pessoa..." : "Um close-up de uma gota de chuva..." }
                                 rows={3} className="w-full bg-zinc-800 rounded-md p-2 text-sm text-zinc-300 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none transition-shadow" disabled={isLoading}
                             />
-                             {(mode === 'create' || mode === 'edit') && (
-                                <textarea
-                                    ref={negativeTextareaRef} value={negativePrompt} onChange={(e) => setNegativePrompt(e.target.value)}
-                                    placeholder="Prompt Negativo: evite baixa qualidade, texto..."
-                                    rows={2} className="w-full bg-zinc-800 rounded-md p-2 text-sm text-zinc-300 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none transition-shadow" disabled={isLoading}
-                                />
-                            )}
                              <button type="submit" disabled={isLoading || (!prompt && mode !== 'edit')} className="w-full flex items-center justify-center gap-2 py-2.5 px-3 bg-blue-600 rounded-md text-white font-semibold hover:bg-blue-500 transition-colors disabled:bg-zinc-700 disabled:cursor-not-allowed">
                                  {isLoading ? <Icons.Spinner /> : <Icons.Sparkles className="!text-lg" />}
                                  <span>Gerar</span>

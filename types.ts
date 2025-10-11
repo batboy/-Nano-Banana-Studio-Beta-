@@ -1,4 +1,5 @@
 
+
 export type Mode = 'create' | 'edit' | 'video';
 export type CreateFunction = 'free' | 'sticker' | 'text' | 'comic';
 export type EditFunction = 'compose' | 'style';
@@ -27,6 +28,7 @@ export interface ReferenceImage {
   mask: UploadedImage | null;
   maskedObjectPreviewUrl?: string;
   isExtractingObject?: boolean;
+  isMasking?: boolean;
 }
 
 export interface HistoryEntry {
