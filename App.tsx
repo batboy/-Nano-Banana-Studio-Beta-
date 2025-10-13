@@ -85,6 +85,13 @@ const PanelSection: React.FC<{ title: string; icon: React.ReactNode; children: R
     );
 };
 
+interface CompositionLayer {
+  refIndex: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 interface ImageEditorProps {
   src: string;
@@ -92,6 +99,9 @@ interface ImageEditorProps {
   detectedObjects: DetectedObject[];
   highlightedObject: DetectedObject | null;
   zoom: number;
+  compositionLayer: CompositionLayer | null;
+  onCompositionLayerChange: (layer: CompositionLayer | null) => void;
+  referenceImages: ReferenceImage[];
 }
 
 interface ImageEditorRef {
@@ -103,15 +113,33 @@ interface ImageEditorRef {
   clearOverlays: () => void;
 }
 
-const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeEditFunction, detectedObjects, highlightedObject, zoom }, ref) => {
+const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ 
+    src, 
+    activeEditFunction, 
+    detectedObjects, 
+    highlightedObject, 
+    zoom,
+    compositionLayer,
+    onCompositionLayerChange,
+    referenceImages
+}, ref) => {
     const imageCanvasRef = useRef<HTMLCanvasElement>(null);
     const maskCanvasRef = useRef<HTMLCanvasElement>(null);
     const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+    const compositionCanvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const originalImageSizeRef = useRef<{ width: number, height: number }>({ width: 0, height: 0 });
     const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
     const panRef = useRef({ isPanning: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 });
     
+    const [interaction, setInteraction] = useState<{
+        type: 'move' | 'resize';
+        corner: 'tl' | 'tr' | 'bl' | 'br';
+        startX: number;
+        startY: number;
+        startLayer: CompositionLayer;
+    } | null>(null);
+
     const clearOverlays = useCallback(() => {
         const canvas = overlayCanvasRef.current;
         if (canvas) {
@@ -136,7 +164,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
             originalImageSizeRef.current = { width: image.width, height: image.height };
             setImageDimensions({ width: image.width, height: image.height });
             
-            const canvases = [imageCanvasRef.current, maskCanvasRef.current, overlayCanvasRef.current];
+            const canvases = [imageCanvasRef.current, maskCanvasRef.current, overlayCanvasRef.current, compositionCanvasRef.current];
             canvases.forEach(canvas => {
                 if(canvas) {
                     canvas.width = image.width;
@@ -204,6 +232,40 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
         }
     }, [imageDimensions, zoom]);
 
+    useEffect(() => {
+        const canvas = compositionCanvasRef.current;
+        const ctx = canvas?.getContext('2d');
+        if (!ctx || !canvas) return;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (compositionLayer && referenceImages) {
+            const refImage = referenceImages[compositionLayer.refIndex];
+            if (!refImage) return;
+
+            const imageToDraw = new Image();
+            imageToDraw.crossOrigin = "anonymous";
+            imageToDraw.src = refImage.previewUrl;
+            imageToDraw.onload = () => {
+                ctx.globalAlpha = 0.7;
+                ctx.drawImage(imageToDraw, compositionLayer.x, compositionLayer.y, compositionLayer.width, compositionLayer.height);
+                ctx.globalAlpha = 1.0;
+
+                ctx.strokeStyle = '#3b82f6';
+                ctx.lineWidth = 1.5 / zoom;
+                ctx.strokeRect(compositionLayer.x, compositionLayer.y, compositionLayer.width, compositionLayer.height);
+                
+                const handleSize = 8 / zoom;
+                ctx.fillStyle = '#3b82f6';
+                const { x, y, width, height } = compositionLayer;
+                ctx.fillRect(x - handleSize / 2, y - handleSize / 2, handleSize, handleSize); // TL
+                ctx.fillRect(x + width - handleSize / 2, y - handleSize / 2, handleSize, handleSize); // TR
+                ctx.fillRect(x - handleSize / 2, y + height - handleSize / 2, handleSize, handleSize); // BL
+                ctx.fillRect(x + width - handleSize / 2, y + height - handleSize / 2, handleSize, handleSize); // BR
+            };
+        }
+    }, [compositionLayer, referenceImages, zoom]);
+
     useImperativeHandle(ref, () => {
         const getMaskAsCanvas = () => {
             const maskCanvas = maskCanvasRef.current;
@@ -266,7 +328,8 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
         };
     });
     
-    const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    const handleContainerMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+        if (compositionLayer) return; // Prevent panning when composing
         const container = containerRef.current;
         if (!container || (container.scrollWidth <= container.clientWidth && container.scrollHeight <= container.clientHeight)) return;
         e.preventDefault();
@@ -277,7 +340,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
         container.style.cursor = 'grabbing';
     };
 
-    const handleMouseUp = () => {
+    const handleContainerMouseUp = () => {
          const container = containerRef.current;
          if(container) {
             panRef.current.isPanning = false;
@@ -289,7 +352,7 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
          }
     };
     
-    const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const handleContainerMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
         if (!panRef.current.isPanning) return;
         const container = containerRef.current;
         if (!container) return;
@@ -302,15 +365,98 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
         container.scrollLeft = panRef.current.scrollLeft - walkX;
         container.scrollTop = panRef.current.scrollTop - walkY;
     };
+    
+    const getMousePos = (e: React.MouseEvent<HTMLCanvasElement>) => {
+        const canvas = compositionCanvasRef.current;
+        if (!canvas) return { x: 0, y: 0 };
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / zoom;
+        const y = (e.clientY - rect.top) / zoom;
+        return { x, y };
+    };
+    
+    const handleCompositionMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+        if (!compositionLayer) return;
+        const { x: mouseX, y: mouseY } = getMousePos(e);
+        
+        const { x, y, width, height } = compositionLayer;
+        const handleSize = 8 / zoom;
+        
+        const corners = {
+            tl: { x: x, y: y },
+            tr: { x: x + width, y: y },
+            bl: { x: x, y: y + height },
+            br: { x: x + width, y: y + height },
+        };
 
+        let hitHandle: 'tl' | 'tr' | 'bl' | 'br' | null = null;
+        for (const key of Object.keys(corners) as ('tl' | 'tr' | 'bl' | 'br')[]) {
+            if (mouseX >= corners[key].x - handleSize / 2 && mouseX <= corners[key].x + handleSize / 2 &&
+                mouseY >= corners[key].y - handleSize / 2 && mouseY <= corners[key].y + handleSize / 2) {
+                hitHandle = key;
+                break;
+            }
+        }
+        
+        if (hitHandle) {
+            setInteraction({ type: 'resize', corner: hitHandle, startX: mouseX, startY: mouseY, startLayer: compositionLayer });
+        } else if (mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height) {
+            // @ts-ignore - 'move' doesn't need a corner, but TS complains. Quick fix.
+            setInteraction({ type: 'move', corner: 'tl', startX: mouseX, startY: mouseY, startLayer: compositionLayer });
+        }
+    };
+    
+    const handleCompositionMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+        if (!interaction || !compositionLayer) return;
+        const { x: mouseX, y: mouseY } = getMousePos(e);
+        const dx = mouseX - interaction.startX;
+        const dy = mouseY - interaction.startY;
+        
+        let newLayer = { ...interaction.startLayer };
+
+        if (interaction.type === 'move') {
+            newLayer.x += dx;
+            newLayer.y += dy;
+        } else if (interaction.type === 'resize') {
+             switch (interaction.corner) {
+                case 'br':
+                    newLayer.width += dx;
+                    newLayer.height += dy;
+                    break;
+                case 'bl':
+                    newLayer.x += dx;
+                    newLayer.width -= dx;
+                    newLayer.height += dy;
+                    break;
+                case 'tr':
+                    newLayer.y += dy;
+                    newLayer.width += dx;
+                    newLayer.height -= dy;
+                    break;
+                case 'tl':
+                    newLayer.x += dx;
+                    newLayer.y += dy;
+                    newLayer.width -= dx;
+                    newLayer.height -= dy;
+                    break;
+            }
+            if (newLayer.width < 10) newLayer.width = 10;
+            if (newLayer.height < 10) newLayer.height = 10;
+        }
+        onCompositionLayerChange(newLayer);
+    };
+    
+    const handleCompositionMouseUp = () => {
+        setInteraction(null);
+    };
 
     return (
         <div ref={containerRef} 
              className="w-full h-full overflow-auto flex items-center justify-center bg-zinc-900/50 rounded-lg"
-             onMouseDown={handleMouseDown}
-             onMouseUp={handleMouseUp}
-             onMouseLeave={handleMouseUp}
-             onMouseMove={handleMouseMove}
+             onMouseDown={handleContainerMouseDown}
+             onMouseUp={handleContainerMouseUp}
+             onMouseLeave={handleContainerMouseUp}
+             onMouseMove={handleContainerMouseMove}
         >
             <div 
                 data-canvas-wrapper="true"
@@ -329,6 +475,15 @@ const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ src, activeE
                 <canvas
                     ref={overlayCanvasRef}
                     className="absolute top-0 left-0 pointer-events-none w-full h-full"
+                />
+                <canvas
+                    ref={compositionCanvasRef}
+                    className="absolute top-0 left-0 w-full h-full"
+                    style={{ cursor: interaction ? 'grabbing' : (compositionLayer ? 'move' : 'default') }}
+                    onMouseDown={handleCompositionMouseDown}
+                    onMouseMove={handleCompositionMouseMove}
+                    onMouseUp={handleCompositionMouseUp}
+                    onMouseLeave={handleCompositionMouseUp}
                 />
             </div>
         </div>
@@ -509,6 +664,7 @@ export default function App() {
     const [detectedObjects, setDetectedObjects] = useState<DetectedObject[]>([]);
     const [highlightedObject, setHighlightedObject] = useState<DetectedObject | null>(null);
     const [currentImageDimensions, setCurrentImageDimensions] = useState<{w: number, h: number} | null>(null);
+    const [compositionLayer, setCompositionLayer] = useState<CompositionLayer | null>(null);
     
     const [activeVideoFunction, setActiveVideoFunction] = useState<VideoFunction>('prompt');
     const [startFrame, setStartFrame] = useState<UploadedImage | null>(null);
@@ -608,6 +764,7 @@ export default function App() {
         setStartFrame(null);
         setStartFramePreview(null);
         resetDetectionState();
+        setCompositionLayer(null);
     };
 
     const isEditStateDirty = useCallback(() => {
@@ -669,6 +826,7 @@ export default function App() {
         const entry = history[index];
         if (!entry) return;
         resetDetectionState();
+        setCompositionLayer(null);
         setHistoryIndex(index);
         setPrompt(entry.prompt);
         setNegativePrompt(entry.negativePrompt || '');
@@ -699,7 +857,10 @@ export default function App() {
     };
 
     const handleEditFunctionClick = (func: EditFunction) => {
-        if (func !== activeEditFunction) setReferenceImages([]);
+        if (func !== activeEditFunction) {
+            setReferenceImages([]);
+            setCompositionLayer(null);
+        }
         setActiveEditFunction(func);
     };
 
@@ -749,6 +910,7 @@ export default function App() {
             processSingleFile(file, (uploadedImage, dataUrl) => {
                 const initialEntry: HistoryEntry = { id: `hist-${Date.now()}`, imageUrl: dataUrl, prompt: '', mode: 'edit', editFunction: activeEditFunction, referenceImages: [] };
                 resetDetectionState();
+                setCompositionLayer(null);
                 setHistory([initialEntry]);
                 setHistoryIndex(0);
                 setReferenceImages([]);
@@ -777,6 +939,9 @@ export default function App() {
     
     const handleRemoveReferenceImage = (indexToRemove: number) => {
         setReferenceImages(prev => prev.filter((_, index) => index !== indexToRemove));
+        if (compositionLayer?.refIndex === indexToRemove) {
+            setCompositionLayer(null);
+        }
         if (activeEditFunction === 'style') setPrompt('');
     };
 
@@ -784,55 +949,88 @@ export default function App() {
     const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); dragCounter.current++; if (dragCounter.current === 1) setIsDragging(true); };
     const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); dragCounter.current--; if (dragCounter.current === 0) setIsDragging(false); };
     
-    const handleDropComposition = async (refIndex: number, e: React.DragEvent<HTMLDivElement>) => {
-        if (!mainContentRef.current || !generatedImage || !editorRef.current) return;
+    const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(false);
+        dragCounter.current = 0;
     
-        const referenceImage = referenceImages[refIndex];
-        if (!referenceImage) {
-            setError("Imagem de referência não encontrada.");
-            return;
+        const jsonData = e.dataTransfer.getData('application/json');
+        if (jsonData) {
+            if (!mainContentRef.current || !generatedImage || !editorRef.current) return;
+
+            const { index: refIndex } = JSON.parse(jsonData);
+            const referenceImage = referenceImages[refIndex];
+            if (!referenceImage || !referenceImage.mask) {
+                setError("Objeto de referência inválido ou sem máscara. Não pode ser posicionado.");
+                return;
+            }
+    
+            const canvasWrapper = mainContentRef.current.querySelector('[data-canvas-wrapper="true"]') as HTMLElement;
+            if (!canvasWrapper) return;
+            const canvasWrapperRect = canvasWrapper.getBoundingClientRect();
+    
+            if (
+                e.clientX < canvasWrapperRect.left || e.clientX > canvasWrapperRect.right ||
+                e.clientY < canvasWrapperRect.top || e.clientY > canvasWrapperRect.bottom
+            ) {
+                return; 
+            }
+    
+            const xInCanvas = (e.clientX - canvasWrapperRect.left) + (canvasWrapper.parentElement?.scrollLeft || 0);
+            const yInCanvas = (e.clientY - canvasWrapperRect.top) + (canvasWrapper.parentElement?.scrollTop || 0);
+        
+            const originalX = xInCanvas / zoom;
+            const originalY = yInCanvas / zoom;
+
+            try {
+                const maskImage = await new Promise<HTMLImageElement>((resolve, reject) => {
+                    const img = new Image();
+                    img.onload = () => resolve(img);
+                    img.onerror = reject;
+                    img.src = `data:${referenceImage.mask!.mimeType};base64,${referenceImage.mask!.base64}`;
+                });
+    
+                const initialWidth = maskImage.width;
+                const initialHeight = maskImage.height;
+    
+                setCompositionLayer({
+                    refIndex,
+                    x: originalX - initialWidth / 2,
+                    y: originalY - initialHeight / 2,
+                    width: initialWidth,
+                    height: initialHeight,
+                });
+                setError(null);
+            } catch (err) {
+                setError("Não foi possível carregar a máscara do objeto de referência.");
+                console.error(err);
+            }
+
+        } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            handleFileDropOnCanvas(e.dataTransfer.files);
         }
+    };
     
-        if (referenceImage.isMasking) {
-            setError("Aguarde a análise do objeto na imagem de referência terminar.");
-            return;
-        }
-    
-        if (!referenceImage.mask) {
-            setError("Não foi possível extrair um objeto da imagem de referência. Tente outra imagem.");
-            return;
-        }
-    
-        const canvasWrapper = mainContentRef.current.querySelector('[data-canvas-wrapper="true"]') as HTMLElement;
-        if (!canvasWrapper) return;
-        const canvasWrapperRect = canvasWrapper.getBoundingClientRect();
-    
-        if (
-            e.clientX < canvasWrapperRect.left || e.clientX > canvasWrapperRect.right ||
-            e.clientY < canvasWrapperRect.top || e.clientY > canvasWrapperRect.bottom
-        ) {
-            return; 
-        }
-    
-        const x = (e.clientX - canvasWrapperRect.left) + (canvasWrapper.parentElement?.scrollLeft || 0);
-        const y = (e.clientY - canvasWrapperRect.top) + (canvasWrapper.parentElement?.scrollTop || 0);
-    
-        const originalX = x / zoom;
-        const originalY = y / zoom;
+    const handleConfirmComposition = async () => {
+        if (!compositionLayer || !generatedImage) return;
     
         setIsLoading(true);
         setLoadingMessage("Compondo as imagens...");
         setError(null);
     
         try {
-            const originalSize = editorRef.current.getOriginalImageSize();
+            const originalSize = editorRef.current?.getOriginalImageSize();
             if (!originalSize) throw new Error("Não foi possível obter o tamanho da imagem original.");
     
-            const maskImage = new Image();
-            maskImage.src = `data:${referenceImage.mask.mimeType};base64,${referenceImage.mask.base64}`;
-            await new Promise((resolve, reject) => {
-                maskImage.onload = resolve;
-                maskImage.onerror = reject;
+            const refImage = referenceImages[compositionLayer.refIndex];
+            if (!refImage.mask) throw new Error("A máscara da imagem de referência não foi encontrada.");
+    
+            const maskImage = await new Promise<HTMLImageElement>((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = reject;
+                img.src = `data:${refImage.mask.mimeType};base64,${refImage.mask.base64}`;
             });
             
             const destMaskCanvas = document.createElement('canvas');
@@ -844,9 +1042,7 @@ export default function App() {
             ctx.fillStyle = 'black';
             ctx.fillRect(0, 0, originalSize.width, originalSize.height);
     
-            const drawX = originalX - maskImage.width / 2;
-            const drawY = originalY - maskImage.height / 2;
-            ctx.drawImage(maskImage, drawX, drawY);
+            ctx.drawImage(maskImage, compositionLayer.x, compositionLayer.y, compositionLayer.width, compositionLayer.height);
     
             const destMaskDataUrl = destMaskCanvas.toDataURL('image/png');
             const destMask: UploadedImage = {
@@ -861,7 +1057,7 @@ export default function App() {
             const compositionPrompt = `Usando a imagem de referência, coloque seu objeto principal na imagem principal no local indicado pela máscara de edição. Misture-o perfeitamente, ajustando iluminação, sombras, escala e perspectiva. O objeto da imagem de referência deve parecer pertencer naturalmente à cena principal.`;
     
             const resultImageUrl = await processImagesWithPrompt(
-                compositionPrompt, mainImage, [referenceImage], destMask, 'compose',
+                compositionPrompt, mainImage, [refImage], destMask, 'compose',
                 originalSize, styleStrength, negativePrompt
             );
             if (resultImageUrl.startsWith('A edição foi bloqueada')) { throw new Error(resultImageUrl); }
@@ -881,6 +1077,7 @@ export default function App() {
             setHistoryIndex(prev => prev + 1);
             editorRef.current?.clearMask();
             resetDetectionState();
+            setCompositionLayer(null);
     
         } catch (e: any) {
             setError(e.message || "Ocorreu um erro durante a composição.");
@@ -888,22 +1085,6 @@ export default function App() {
             setIsLoading(false);
         }
     };
-
-    const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsDragging(false);
-        dragCounter.current = 0;
-    
-        const jsonData = e.dataTransfer.getData('application/json');
-        if (jsonData) {
-            const { index } = JSON.parse(jsonData);
-            handleDropComposition(index, e);
-        } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-            handleFileDropOnCanvas(e.dataTransfer.files);
-        }
-    };
-    
 
     const handleDetectObjects = async () => {
         if (!generatedImage || isDetectingObjects) return;
@@ -999,6 +1180,7 @@ export default function App() {
             
             setReferenceImages([]);
             resetDetectionState();
+            setCompositionLayer(null);
             editorRef.current?.clearMask();
 
         } catch (e: any) {
@@ -1012,6 +1194,13 @@ export default function App() {
     const handleSubmit = async (e: React.FormEvent<HTMLFormElement> | React.MouseEvent<HTMLButtonElement>) => {
         e.preventDefault(); setError(null);
         if (isLoading) return;
+        
+        // Handle active composition via separate button
+        if (compositionLayer) {
+            setError("Confirme ou cancele a posição do objeto antes de gerar uma nova imagem.");
+            return;
+        }
+
         let newHistoryEntry: HistoryEntry;
         try {
             if (mode === 'create') {
@@ -1089,6 +1278,9 @@ export default function App() {
                         activeEditFunction={mode === 'edit' ? activeEditFunction : null}
                         detectedObjects={detectedObjects} highlightedObject={highlightedObject} 
                         zoom={zoom}
+                        compositionLayer={compositionLayer}
+                        onCompositionLayerChange={setCompositionLayer}
+                        referenceImages={referenceImages}
                     />
                 </div>
             );
@@ -1180,6 +1372,17 @@ export default function App() {
             >
                 <div className="flex-1 p-4 overflow-hidden relative flex flex-col min-h-0">
                     <MainContentDisplay />
+                    {compositionLayer && generatedImage && (
+                        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-zinc-900/90 backdrop-blur-sm p-2 rounded-lg shadow-lg flex items-center gap-2 z-10 border border-zinc-700">
+                            <p className="text-sm text-zinc-300 mr-2">Posicionar objeto:</p>
+                            <button onClick={() => setCompositionLayer(null)} className="flex items-center gap-1 px-3 py-1.5 text-sm font-semibold rounded-md bg-zinc-700 hover:bg-zinc-600 transition-colors text-red-400">
+                                <Icons.Close /> Cancelar
+                            </button>
+                            <button onClick={handleConfirmComposition} className="flex items-center gap-1 px-3 py-1.5 text-sm font-semibold rounded-md bg-blue-600 hover:bg-blue-500 text-white transition-colors">
+                                <Icons.Check /> Aplicar
+                            </button>
+                        </div>
+                    )}
                     {isDragging && (
                          <div className="absolute inset-4 border-4 border-dashed border-blue-500 bg-blue-500/10 rounded-lg flex items-center justify-center pointer-events-none">
                              <div className="text-center">
@@ -1296,9 +1499,9 @@ export default function App() {
                                         {referenceImages.slice(0, 6).map((ref, index) => (
                                             <div 
                                                 key={index} 
-                                                className="relative group w-full aspect-square bg-zinc-800 rounded-md overflow-hidden"
-                                                draggable={mode === 'edit' && activeEditFunction === 'compose'}
-                                                onDragStart={mode === 'edit' && activeEditFunction === 'compose' ? (e) => {
+                                                className={`relative group w-full aspect-square bg-zinc-800 rounded-md overflow-hidden ${ref.mask ? 'cursor-grab' : 'cursor-not-allowed'}`}
+                                                draggable={mode === 'edit' && activeEditFunction === 'compose' && !!ref.mask}
+                                                onDragStart={mode === 'edit' && activeEditFunction === 'compose' && !!ref.mask ? (e) => {
                                                     e.dataTransfer.setData('application/json', JSON.stringify({ index }));
                                                     const img = e.currentTarget.querySelector('img');
                                                     if (img) {
@@ -1392,7 +1595,7 @@ export default function App() {
                                 placeholder={ mode === 'create' ? "Um astronauta surfando em um anel de saturno..." : mode === 'edit' ? "Adicione um chapéu de cowboy na pessoa..." : "Um close-up de uma gota de chuva..." }
                                 rows={3} className="w-full bg-zinc-800 rounded-md p-2 text-sm text-zinc-300 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none transition-shadow" disabled={isLoading}
                             />
-                             <button type="submit" disabled={isLoading || (!prompt && mode !== 'edit')} className="w-full flex items-center justify-center gap-2 py-2.5 px-3 bg-blue-600 rounded-md text-white font-semibold hover:bg-blue-500 transition-colors disabled:bg-zinc-700 disabled:cursor-not-allowed">
+                             <button type="submit" disabled={isLoading || (!prompt && mode !== 'edit') || !!compositionLayer} className="w-full flex items-center justify-center gap-2 py-2.5 px-3 bg-blue-600 rounded-md text-white font-semibold hover:bg-blue-500 transition-colors disabled:bg-zinc-700 disabled:cursor-not-allowed">
                                  {isLoading ? <Icons.Spinner /> : <Icons.Sparkles className="!text-lg" />}
                                  <span>Gerar</span>
                              </button>
