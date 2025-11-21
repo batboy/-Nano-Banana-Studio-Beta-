@@ -4,6 +4,7 @@ export type Mode = 'create' | 'video' | 'edit';
 export type CreateFunction = 'free' | 'sticker' | 'text' | 'comic';
 export type VideoFunction = 'prompt' | 'animation';
 export type EditFunction = 'montage';
+export type AIModel = 'flash' | 'pro';
 
 export interface UploadedImage {
   base64: string;
@@ -12,9 +13,10 @@ export interface UploadedImage {
 
 // State for the Create mode
 export interface CreateState {
+  model: AIModel; // New field to select between Flash (Free-ish) and Pro (Paid Key)
   createFunction: CreateFunction;
   aspectRatio: string;
-  resolution: '1K' | '2K' | '4K'; // New Gemini 3 feature
+  resolution: '1K' | '2K' | '4K'; 
   negativePrompt: string;
   styleModifier: string;
   cameraAngle: string;

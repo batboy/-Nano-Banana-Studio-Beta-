@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 // FIX: Import `EditHistoryEntry` to resolve a type error when creating a new history entry for an edit operation.
-import type { Mode, CreateFunction, UploadedImage, HistoryEntry, UploadProgress, VideoFunction, CreateState, VideoState, EditState, EditFunction, ReferenceLayer, EditHistoryEntry } from './types';
+import type { Mode, CreateFunction, UploadedImage, HistoryEntry, UploadProgress, VideoFunction, CreateState, VideoState, EditState, EditFunction, ReferenceLayer, EditHistoryEntry, CreateHistoryEntry } from './types';
 import { generateImage, generateVideo, editImage } from './services/geminiService';
 import * as Icons from './Icons';
 
@@ -39,7 +39,7 @@ const STYLE_OPTIONS: Record<Exclude<CreateFunction, 'montage'>, { value: string,
 const CAMERA_ANGLE_OPTIONS = [ { value: 'default', label: 'Padrão' }, { value: 'eye-level', label: 'Nível do Olhar' }, { value: 'close-up', label: 'Close-up' }, { value: 'low angle', label: 'Ângulo Baixo' }, { value: 'high angle (bird\'s-eye view)', label: 'Plano Alto' }, { value: 'wide shot (long shot)', label: 'Plano Geral' } ];
 const LIGHTING_STYLE_OPTIONS = [ { value: 'default', label: 'Padrão' }, { value: 'cinematic', label: 'Cinemática' }, { value: 'soft', label: 'Luz Suave' }, { value: 'dramatic', label: 'Dramática' }, { value: 'studio', label: 'Estúdio' }, { value: 'natural', label: 'Natural' } ];
 
-const INITIAL_CREATE_STATE: CreateState = { createFunction: 'free', aspectRatio: '1:1', resolution: '1K', negativePrompt: '', styleModifier: 'default', cameraAngle: 'default', lightingStyle: 'default', comicColorPalette: 'vibrant' };
+const INITIAL_CREATE_STATE: CreateState = { model: 'flash', createFunction: 'free', aspectRatio: '1:1', resolution: '1K', negativePrompt: '', styleModifier: 'default', cameraAngle: 'default', lightingStyle: 'default', comicColorPalette: 'vibrant' };
 const INITIAL_VIDEO_STATE: VideoState = { videoFunction: 'prompt', videoResolution: '720p', startFrame: null, startFramePreviewUrl: null };
 const INITIAL_EDIT_STATE: EditState = { editFunction: 'montage', background: null, backgroundPreviewUrl: null, references: [], activeReferenceId: null, negativePrompt: '' };
 
@@ -179,16 +179,42 @@ const Sidebar: React.FC<{
     };
 
     const renderCreateControls = () => {
-        const { createFunction, aspectRatio, resolution, styleModifier, cameraAngle, lightingStyle, comicColorPalette } = createState;
+        const { createFunction, aspectRatio, resolution, styleModifier, cameraAngle, lightingStyle, comicColorPalette, model } = createState;
         return (
             <div className="space-y-4">
-                <div className="bg-zinc-900/50 p-2 rounded-lg border border-zinc-800">
-                     <label className="block text-xs font-medium text-blue-400 mb-1.5">Qualidade (Gemini 3)</label>
-                     <div className="custom-select-wrapper">
-                        <select value={resolution} onChange={(e) => setCreateState(s => ({ ...s, resolution: e.target.value as any }))} className="custom-select !bg-zinc-900 !border-zinc-700 focus:!border-blue-500" aria-label="Resolução">
-                            {IMAGE_RESOLUTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                        </select>
-                    </div>
+                {/* Model Selection */}
+                 <div className="bg-zinc-900/50 p-2 rounded-lg border border-zinc-800">
+                     <label className="block text-xs font-medium text-blue-400 mb-1.5">Modelo de IA</label>
+                     <div className="flex bg-zinc-800 rounded-lg p-1 gap-1 mb-2">
+                        <button 
+                            type="button"
+                            onClick={() => setCreateState(s => ({ ...s, model: 'flash' }))}
+                            className={`flex-1 py-1.5 text-[10px] font-bold rounded-md transition-all ${model === 'flash' ? 'bg-blue-600 text-white shadow-sm' : 'text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'}`}
+                        >
+                            Flash 2.5
+                            <span className="block font-normal opacity-70">Padrão</span>
+                        </button>
+                        <button 
+                            type="button"
+                            onClick={() => setCreateState(s => ({ ...s, model: 'pro' }))}
+                            className={`flex-1 py-1.5 text-[10px] font-bold rounded-md transition-all ${model === 'pro' ? 'bg-purple-600 text-white shadow-sm' : 'text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'}`}
+                        >
+                            Gemini 3
+                            <span className="block font-normal opacity-70">Ultra</span>
+                        </button>
+                     </div>
+                     
+                     {model === 'pro' && (
+                         <>
+                            <div className="h-px bg-zinc-800 my-2"></div>
+                            <label className="block text-xs font-medium text-purple-400 mb-1.5">Resolução (Gemini 3)</label>
+                            <div className="custom-select-wrapper">
+                                <select value={resolution} onChange={(e) => setCreateState(s => ({ ...s, resolution: e.target.value as any }))} className="custom-select" aria-label="Resolução">
+                                    {IMAGE_RESOLUTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                </select>
+                            </div>
+                        </>
+                     )}
                 </div>
 
                 {STYLE_OPTIONS[createFunction].length > 0 && (
@@ -218,7 +244,7 @@ const Sidebar: React.FC<{
                             <label className="block text-xs font-medium text-zinc-400 mb-1">Iluminação</label>
                             <div className="custom-select-wrapper"><select value={lightingStyle} onChange={(e) => setCreateState(s => ({ ...s, lightingStyle: e.target.value }))} className="custom-select" aria-label="Iluminação">{LIGHTING_STYLE_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></div>
                         </div>
-                        <div>
+                        <div className={createFunction === 'comic' ? '' : 'col-span-2'}>
                             <label className="block text-xs font-medium text-zinc-400 mb-1">Ângulo</label>
                             <div className="custom-select-wrapper"><select value={cameraAngle} onChange={(e) => setCreateState(s => ({ ...s, cameraAngle: e.target.value }))} className="custom-select" aria-label="Ângulo da Câmera">{CAMERA_ANGLE_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></div>
                         </div>
@@ -356,8 +382,8 @@ const Sidebar: React.FC<{
                 <div>
                      <form onSubmit={handleSubmit} className="space-y-3">
                         <textarea ref={textareaRef} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={ mode === 'create' ? "Descreva sua imaginação em detalhes..." : (mode === 'edit' ? "Descreva as alterações..." : "Descreva a cena do vídeo...") } rows={3} className="w-full bg-zinc-800 rounded-lg p-3 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-600/50 resize-none transition-shadow shadow-inner" disabled={isLoading} />
-                         <button type="submit" disabled={isLoading || (mode === 'edit' && editState.references.length > 0) || !prompt.trim()} className="w-full flex items-center justify-center gap-2 py-3 px-3 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg text-white font-bold hover:from-blue-500 hover:to-indigo-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-900/30 active:scale-[0.98]">
-                             {isLoading ? <Icons.Spinner /> : <Icons.Sparkles className="!text-lg" />}<span>{mode === 'create' ? 'Gerar 3.0' : (mode === 'video' ? 'Gerar Veo' : 'Editar')}</span>
+                         <button type="submit" disabled={isLoading || (mode === 'edit' && editState.references.length > 0) || !prompt.trim()} className={`w-full flex items-center justify-center gap-2 py-3 px-3 bg-gradient-to-r rounded-lg text-white font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-900/30 active:scale-[0.98] ${mode === 'create' && createState.model === 'pro' ? 'from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500' : 'from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500'}`}>
+                             {isLoading ? <Icons.Spinner /> : <Icons.Sparkles className="!text-lg" />}<span>{mode === 'create' ? (createState.model === 'pro' ? 'Gerar Ultra' : 'Gerar Flash') : (mode === 'video' ? 'Gerar Veo' : 'Editar')}</span>
                          </button>
                     </form>
                      {error && <div className="mt-2 p-2 bg-red-950/50 border border-red-900/50 text-red-300 text-xs rounded-lg flex items-start gap-2 animate-fadeIn"><Icons.AlertCircle className="shrink-0 mt-0.5 !text-base text-red-500" /><span>{error}</span><button onClick={() => setError(null)} className="ml-auto p-0.5 text-red-400 hover:text-white"><Icons.Close className="!text-base" /></button></div>}
@@ -1055,6 +1081,42 @@ export default function App() {
         setEditState(s => ({ ...s, references: [], activeReferenceId: null }));
     };
 
+    const handleEasterEgg = async () => {
+        if (isLoading) return;
+        
+        // Force switch to create mode if needed
+        if (mode !== 'create') {
+            setMode('create');
+        }
+
+        const eggPrompt = "A cute monkey wearing a Brazil soccer team jersey holding a banana";
+        setPrompt(eggPrompt);
+        
+        setError(null);
+        setIsLoading(true);
+        setLoadingMessage('🍌 Ativando Protocolo Macaco Brasileiro...');
+
+        try {
+             const resultUrl = await generateImage({ prompt: eggPrompt, ...createState });
+             const newEntry: CreateHistoryEntry = { 
+                 id: `hist-${Date.now()}`, 
+                 prompt: eggPrompt, 
+                 mode: 'create', 
+                 imageUrl: resultUrl, 
+                 ...createState 
+             };
+             
+             const newHistory = history.slice(0, historyIndex + 1).concat(newEntry);
+             setHistory(newHistory);
+             setHistoryIndex(newHistory.length - 1);
+        } catch (e: any) {
+            setError(e.message || "Erro no Easter Egg.");
+        } finally {
+            setIsLoading(false);
+            setLoadingMessage('Gerando sua mídia...');
+        }
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (isLoading || (mode === 'edit' && editState.references.length > 0)) return;
@@ -1120,7 +1182,8 @@ export default function App() {
             <header className="app-header bg-zinc-950/90 backdrop-blur-md border-b border-zinc-800 flex items-center justify-between px-6 z-20 relative">
                  <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-blue-600/50 to-transparent"></div>
                 <h1 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
-                    <span>🍌 Nano Banana Studio</span>
+                    <span onClick={handleEasterEgg} className="cursor-pointer hover:scale-125 transition-transform" title="Segredo da Banana...">🍌</span>
+                    <span>Nano Banana Studio</span>
                     <span className="text-[10px] font-bold tracking-wider text-white bg-gradient-to-r from-blue-600 to-purple-600 px-2 py-0.5 rounded-full uppercase shadow-lg shadow-blue-900/40">Gemini 3.0</span>
                 </h1>
             </header>

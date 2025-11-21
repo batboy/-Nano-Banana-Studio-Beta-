@@ -11,8 +11,8 @@ const handleGeminiError = (e: any, context: string): Error => {
     console.error(`Gemini API Error (${context}):`, e);
     const errorMessage = (e?.message || JSON.stringify(e) || '').toLowerCase();
 
-    if (errorMessage.includes('api key not valid')) {
-        return new Error("A chave da API é inválida. Por favor, contate o suporte.");
+    if (errorMessage.includes('api key not valid') || errorMessage.includes('requested entity was not found')) {
+        return new Error("Para usar o modo Gemini 3 / Veo, é necessário selecionar uma chave de API vinculada a um projeto com faturamento. Tente mudar para o modelo 'Flash' para uso gratuito.");
     }
     if (errorMessage.includes('quota') || errorMessage.includes('resource_exhausted')) {
         return new Error(`Sua cota de uso da API foi excedida durante a ${context}. Por favor, tente novamente mais tarde.`);
@@ -27,7 +27,7 @@ const handleGeminiError = (e: any, context: string): Error => {
         return new Error(`A solicitação para ${context} é inválida. Isso pode ser causado por um prompt malformado ou parâmetros incompatíveis.`);
     }
 
-    return new Error(`Ocorreu um erro inesperado durante a ${context}. A API pode estar temporariamente indisponível. Tente novamente.`);
+    return new Error(`Ocorreu um erro inesperado durante a ${context}. A API pode estar temporariamente indisponível. Tente mudar para o modelo Flash.`);
 };
 
 export const fileToBase64 = (file: File): Promise<UploadedImage> => {
@@ -55,7 +55,6 @@ export const generateVideo = async (
         } : undefined;
 
         // Check for API Key selection if running in AI Studio environment (standard procedure for Veo)
-        // This assumes window.aistudio is available in the specific environment, otherwise skips
         if (typeof window !== 'undefined' && (window as any).aistudio) {
             const hasKey = await (window as any).aistudio.hasSelectedApiKey();
             if (!hasKey) {
@@ -142,7 +141,7 @@ const buildImagePrompt = (options: GenerateImageOptions): string => {
             break;
         case 'free':
         default:
-            promptParts.push(`A high quality image of ${prompt}`);
+            promptParts.push(prompt);
             const lightingDescriptions: { [key: string]: string } = {
                 'cinematic': 'film-inspired cinematic lighting with strong contrasts between light and shadow, slightly desaturated or artistically toned colors, focused on a dramatic movie scene atmosphere, with directional lighting to create depth',
                 'soft': 'soft, diffused, and homogeneous lighting with gentle, subtle shadows, creating a delicate, cozy, and serene atmosphere, perfect for elegant and natural portraits that soften imperfections',
@@ -177,35 +176,67 @@ export const generateImage = async (options: GenerateImageOptions): Promise<stri
     const finalPrompt = buildImagePrompt(options);
 
     try {
-        // Upgrade to Gemini 3 Pro Image Preview for Create Mode
-        // This supports 1K, 2K, 4K via 'imageSize'
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-image-preview',
-            contents: { parts: [{ text: finalPrompt }] },
-            config: {
-                imageConfig: {
-                    aspectRatio: options.aspectRatio,
-                    imageSize: options.resolution || "1K"
-                }
-            },
-        });
+        // Standard Mode: Use Gemini 2.5 Flash Image
+        // Does NOT enforce the popup key selection, making it friendlier for free tier/env keys
+        if (options.model === 'flash') {
+             const currentAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
+             const response = await currentAi.models.generateContent({
+                model: 'gemini-2.5-flash-image',
+                contents: { parts: [{ text: finalPrompt }] },
+                config: {
+                    // Flash 2.5 image doesn't support explicit imageSize in the same way as Pro 3
+                    // We rely on default output
+                },
+            });
 
-        // Loop through parts to find the image data (as per Gemini 3 specs)
-        if (response.candidates?.[0]?.content?.parts) {
-            for (const part of response.candidates[0].content.parts) {
-                if (part.inlineData) {
-                    const base64EncodeString: string = part.inlineData.data;
-                    // Assuming PNG based on model behavior or mimeType from response if available
-                    const mimeType = part.inlineData.mimeType || 'image/png';
-                    return `data:${mimeType};base64,${base64EncodeString}`;
+            if (response.candidates?.[0]?.content?.parts) {
+                for (const part of response.candidates[0].content.parts) {
+                    if (part.inlineData) {
+                        const base64EncodeString: string = part.inlineData.data;
+                        const mimeType = part.inlineData.mimeType || 'image/png';
+                        return `data:${mimeType};base64,${base64EncodeString}`;
+                    }
                 }
             }
-        }
+            throw new Error("A API Flash não retornou dados de imagem.");
+        } 
+        
+        // Ultra Mode: Use Gemini 3 Pro Image Preview
+        // This requires a paid project key selection
+        else {
+            if (typeof window !== 'undefined' && (window as any).aistudio) {
+                const hasKey = await (window as any).aistudio.hasSelectedApiKey();
+                if (!hasKey) {
+                     await (window as any).aistudio.openSelectKey();
+                }
+            }
+            const currentAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-        throw new Error("A API não retornou dados de imagem.");
+            const response = await currentAi.models.generateContent({
+                model: 'gemini-3-pro-image-preview',
+                contents: { parts: [{ text: finalPrompt }] },
+                config: {
+                    imageConfig: {
+                        aspectRatio: options.aspectRatio,
+                        imageSize: options.resolution || "1K"
+                    }
+                },
+            });
+
+            if (response.candidates?.[0]?.content?.parts) {
+                for (const part of response.candidates[0].content.parts) {
+                    if (part.inlineData) {
+                        const base64EncodeString: string = part.inlineData.data;
+                        const mimeType = part.inlineData.mimeType || 'image/png';
+                        return `data:${mimeType};base64,${base64EncodeString}`;
+                    }
+                }
+            }
+            throw new Error("A API Gemini 3 não retornou dados de imagem.");
+        }
         
     } catch (e: any) {
-        throw handleGeminiError(e, "geração da imagem (Gemini 3)");
+        throw handleGeminiError(e, `geração da imagem (${options.model === 'pro' ? 'Gemini 3' : 'Flash 2.5'})`);
     }
 };
 
