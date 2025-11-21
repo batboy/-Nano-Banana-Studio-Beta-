@@ -1,64 +1,88 @@
+import { string } from "react-dom/test-utils";
 
-
-export type Mode = 'create' | 'edit' | 'video';
+export type Mode = 'create' | 'video' | 'edit';
 export type CreateFunction = 'free' | 'sticker' | 'text' | 'comic';
-export type EditFunction = 'compose' | 'style';
 export type VideoFunction = 'prompt' | 'animation';
-
-export interface BoundingBox {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-}
-
-export interface DetectedObject {
-  name: string;
-  box: BoundingBox;
-}
+export type EditFunction = 'montage';
 
 export interface UploadedImage {
   base64: string;
   mimeType: string;
 }
 
-export interface ReferenceImage {
-  image: UploadedImage;
-  previewUrl: string;
-  mask: UploadedImage | null;
-  maskedObjectPreviewUrl?: string;
-  isExtractingObject?: boolean;
-  isMasking?: boolean;
+// State for the Create mode
+export interface CreateState {
+  createFunction: CreateFunction;
+  aspectRatio: string;
+  resolution: '1K' | '2K' | '4K'; // New Gemini 3 feature
+  negativePrompt: string;
+  styleModifier: string;
+  cameraAngle: string;
+  lightingStyle: string;
+  comicColorPalette: 'vibrant' | 'noir';
 }
 
-export interface HistoryEntry {
-  id: string;
-  imageUrl?: string;
-  videoUrl?: string;
+// State for the Video mode
+export interface VideoState {
+  videoFunction: VideoFunction;
+  videoResolution: '720p' | '1080p'; // New Veo 3.1 feature
+  startFrame: UploadedImage | null;
+  startFramePreviewUrl: string | null;
+}
 
-  // Common state
+// State for an individual reference layer in Edit mode
+export interface ReferenceLayer {
+    id: string;
+    image: UploadedImage;
+    previewUrl: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation: number;
+    zIndex: number;
+}
+
+// State for the Edit mode - now layer-based
+export interface EditState {
+  editFunction: EditFunction;
+  background: UploadedImage | null;
+  backgroundPreviewUrl: string | null;
+  references: ReferenceLayer[];
+  activeReferenceId: string | null;
+  negativePrompt: string;
+}
+
+// Options for the generateImage API call for better maintainability
+export interface GenerateImageOptions extends Omit<CreateState, 'negativePrompt'> {
+  prompt: string;
+  negativePrompt?: string;
+}
+
+// Discriminated union for History entries for type safety
+interface BaseHistoryEntry {
+  id: string;
   prompt: string;
   mode: Mode;
-  negativePrompt?: string;
-  
-  // Create mode state
-  createFunction?: CreateFunction;
-  aspectRatio?: string;
-  comicColorPalette?: 'vibrant' | 'noir';
-  styleModifier?: string;
-  cameraAngle?: string;
-  lightingStyle?: string;
-  
-  // Edit mode state
-  editFunction?: EditFunction;
-  referenceImages?: ReferenceImage[];
-  styleStrength?: number;
-
-  // Video mode state
-  videoFunction?: VideoFunction;
-  startFrame?: UploadedImage;
-  startFramePreviewUrl?: string;
 }
+
+export interface CreateHistoryEntry extends BaseHistoryEntry, CreateState {
+  mode: 'create';
+  imageUrl: string;
+}
+
+export interface VideoHistoryEntry extends BaseHistoryEntry, VideoState {
+  mode: 'video';
+  videoUrl: string;
+}
+
+export interface EditHistoryEntry extends BaseHistoryEntry, Omit<EditState, 'activeReferenceId'> {
+  mode: 'edit';
+  imageUrl: string;
+}
+
+export type HistoryEntry = CreateHistoryEntry | VideoHistoryEntry | EditHistoryEntry;
+
 
 export interface UploadProgress {
   id: string;

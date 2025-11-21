@@ -1,1609 +1,1145 @@
-import React, { useState, useCallback, ChangeEvent, useEffect, useRef, useImperativeHandle, forwardRef, useMemo } from 'react';
-import type { Mode, CreateFunction, EditFunction, UploadedImage, HistoryEntry, UploadProgress, ReferenceImage, DetectedObject, VideoFunction } from './types';
-import { generateImage, processImagesWithPrompt, analyzeImageStyle, detectObjects, generateVideo, generateObjectMask } from './services/geminiService';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+// FIX: Import `EditHistoryEntry` to resolve a type error when creating a new history entry for an edit operation.
+import type { Mode, CreateFunction, UploadedImage, HistoryEntry, UploadProgress, VideoFunction, CreateState, VideoState, EditState, EditFunction, ReferenceLayer, EditHistoryEntry } from './types';
+import { generateImage, generateVideo, editImage } from './services/geminiService';
 import * as Icons from './Icons';
 
-// Reusable Slider Component
-const Slider: React.FC<{
-    label?: string;
-    value: number;
-    min: number;
-    max: number;
-    step?: number;
-    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-    'aria-label': string;
-    sliderWidthClass?: string;
-}> = ({ label, value, min, max, step, onChange, 'aria-label': ariaLabel, sliderWidthClass = 'w-24' }) => {
-    const inputRef = useRef<HTMLInputElement>(null);
+// --- Constants ---
+const ALL_SUPPORTED_ASPECT_RATIOS = [
+    { label: 'Quadrado', options: ['1:1'] },
+    { label: 'Paisagem (Horizontal)', options: ['16:9', '4:3'] },
+    { label: 'Retrato (Vertical)', options: ['9:16', '3:4'] },
+];
+const IMAGE_RESOLUTIONS = [
+    { value: '1K', label: '1K (Padrão)' },
+    { value: '2K', label: '2K (Alta Definição)' },
+    { value: '4K', label: '4K (Ultra HD)' },
+];
+const VIDEO_RESOLUTIONS = [
+    { value: '720p', label: '720p (HD)' },
+    { value: '1080p', label: '1080p (Full HD)' },
+];
 
+const CREATE_FUNCTIONS: { id: CreateFunction, name: string, icon: React.ReactNode }[] = [
+    { id: 'free', name: 'Livre', icon: <Icons.Image /> }, { id: 'sticker', name: 'Sticker', icon: <Icons.Sticker /> },
+    { id: 'text', name: 'Texto / Logo', icon: <Icons.Type /> }, { id: 'comic', name: 'HQ', icon: <Icons.Comic /> },
+];
+const EDIT_FUNCTIONS: { id: EditFunction, name: string, icon: React.ReactNode }[] = [
+    { id: 'montage', name: 'Montagem', icon: <Icons.Montage /> },
+];
+const VIDEO_FUNCTIONS: { id: VideoFunction, name: string, icon: React.ReactNode }[] = [
+    { id: 'prompt', name: 'Prompt de Vídeo', icon: <Icons.Prompt /> }, { id: 'animation', name: 'Animar Imagem', icon: <Icons.Start /> },
+];
+const STYLE_OPTIONS: Record<Exclude<CreateFunction, 'montage'>, { value: string, label: string }[]> = {
+    free: [],
+    sticker: [ { value: 'cartoon', label: 'Desenho' }, { value: 'vintage', label: 'Vintage' }, { value: 'holographic', label: 'Holográfico' }, { value: 'embroidered patch', label: 'Bordado' } ],
+    text: [ { value: 'minimalist', label: 'Minimalista' }, { value: 'corporate', label: 'Corporativo' }, { value: 'playful', label: 'Divertido' }, { value: 'geometric', label: 'Geométrico' } ],
+    comic: [ { value: 'American comic book', label: 'Americano' }, { value: 'Japanese manga', label: 'Mangá' }, { value: 'franco-belgian comics (bande dessinée)', label: 'Franco-Belga' } ],
+};
+const CAMERA_ANGLE_OPTIONS = [ { value: 'default', label: 'Padrão' }, { value: 'eye-level', label: 'Nível do Olhar' }, { value: 'close-up', label: 'Close-up' }, { value: 'low angle', label: 'Ângulo Baixo' }, { value: 'high angle (bird\'s-eye view)', label: 'Plano Alto' }, { value: 'wide shot (long shot)', label: 'Plano Geral' } ];
+const LIGHTING_STYLE_OPTIONS = [ { value: 'default', label: 'Padrão' }, { value: 'cinematic', label: 'Cinemática' }, { value: 'soft', label: 'Luz Suave' }, { value: 'dramatic', label: 'Dramática' }, { value: 'studio', label: 'Estúdio' }, { value: 'natural', label: 'Natural' } ];
+
+const INITIAL_CREATE_STATE: CreateState = { createFunction: 'free', aspectRatio: '1:1', resolution: '1K', negativePrompt: '', styleModifier: 'default', cameraAngle: 'default', lightingStyle: 'default', comicColorPalette: 'vibrant' };
+const INITIAL_VIDEO_STATE: VideoState = { videoFunction: 'prompt', videoResolution: '720p', startFrame: null, startFramePreviewUrl: null };
+const INITIAL_EDIT_STATE: EditState = { editFunction: 'montage', background: null, backgroundPreviewUrl: null, references: [], activeReferenceId: null, negativePrompt: '' };
+
+type PreMontageState = {
+    background: UploadedImage | null;
+    backgroundPreviewUrl: string | null;
+    references: ReferenceLayer[];
+} | null;
+
+// --- Custom Hooks ---
+const useAutoResizeTextarea = (value: string) => {
+    const ref = useRef<HTMLTextAreaElement>(null);
     useEffect(() => {
-        if (inputRef.current) {
-            const rangeInput = inputRef.current;
-            const percentage = ((value - min) * 100) / (max - min);
-            rangeInput.style.background = `linear-gradient(to right, #3b82f6 ${percentage}%, #3f3f46 ${percentage}%)`;
+        const textarea = ref.current;
+        if (textarea) {
+            textarea.style.height = 'auto';
+            textarea.style.height = `${textarea.scrollHeight}px`;
         }
-    }, [value, min, max]);
-
-    return (
-        <div className="flex items-center gap-2">
-            {label && <label className="text-xs text-zinc-400 whitespace-nowrap">{label}</label>}
-            <input
-                ref={inputRef}
-                type="range"
-                min={min}
-                max={max}
-                step={step || 1}
-                value={value}
-                onChange={onChange}
-                className={`custom-slider ${sliderWidthClass}`}
-                aria-label={ariaLabel}
-            />
-        </div>
-    );
+    }, [value]);
+    return ref;
 };
 
-const ToolbarButton: React.FC<{
-  'data-function': string;
-  isActive: boolean;
-  onClick: (func: any) => void;
-  icon: React.ReactNode;
-  name: string;
-}> = ({ 'data-function': dataFunction, isActive, onClick, icon, name }) => (
-  <button
-    data-function={dataFunction}
-    onClick={() => onClick(dataFunction)}
-    title={name}
-    className={`relative flex items-center justify-center p-3 rounded-lg cursor-pointer transition-colors duration-200 w-full aspect-square group
-      ${isActive ? 'bg-zinc-700 text-zinc-100' : 'hover:bg-zinc-800 text-zinc-400'
-    }`}
-  >
-    {icon}
-    {isActive && <div className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-1 bg-blue-500 rounded-r-full"></div>}
-  </button>
+// --- Child Components ---
+const ToolbarButton: React.FC<{ 'data-function': string; isActive: boolean; onClick: (func: any) => void; icon: React.ReactNode; name: string; }> = ({ 'data-function': dataFunction, isActive, onClick, icon, name }) => (
+    <button 
+        data-function={dataFunction} 
+        onClick={() => onClick(dataFunction)} 
+        title={name} 
+        className={`relative flex items-center justify-center p-3 rounded-xl cursor-pointer transition-all duration-300 w-full aspect-square group ${isActive ? 'bg-gradient-to-br from-blue-600 to-indigo-700 text-white shadow-lg shadow-blue-900/20 scale-105' : 'hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200'}`}
+    >
+        {icon}
+        {isActive && <div className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-1 bg-white rounded-r-full shadow-[0_0_10px_rgba(255,255,255,0.5)]"></div>}
+    </button>
 );
-
 
 const PanelSection: React.FC<{ title: string; icon: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean; className?: string; }> = ({ title, icon, children, defaultOpen = true, className }) => {
     const [isOpen, setIsOpen] = useState(defaultOpen);
-
     return (
-        <div className={`border-b border-zinc-800 ${className ?? ''}`.trim()}>
-            <button
-                onClick={() => setIsOpen(!isOpen)}
-                className="w-full flex items-center justify-between p-2 text-xs font-bold text-zinc-300 hover:bg-zinc-800/50"
-                aria-expanded={isOpen}
-                title={`Expandir/recolher ${title}`}
-            >
-                <div className="flex items-center gap-2">
-                    {icon}
-                    <span className="uppercase tracking-wider">{title}</span>
-                </div>
+        <div className={`border-b border-zinc-800/50 ${className ?? ''}`.trim()}>
+            <button onClick={() => setIsOpen(!isOpen)} className="w-full flex items-center justify-between p-3 text-xs font-bold text-zinc-300 hover:bg-zinc-800/30 transition-colors" aria-expanded={isOpen} title={`Expandir/recolher ${title}`}>
+                <div className="flex items-center gap-2 text-blue-400">{icon}<span className="uppercase tracking-wider text-zinc-300">{title}</span></div>
                 <Icons.ChevronDown className={`transition-transform duration-200 text-base ${isOpen ? 'rotate-180' : ''}`} />
             </button>
-            {isOpen && <div className="p-3 space-y-3">{children}</div>}
+            {isOpen && <div className="p-3 space-y-4 animate-fadeIn">{children}</div>}
         </div>
     );
 };
 
-interface CompositionLayer {
-  refIndex: number;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-interface ImageEditorProps {
-  src: string;
-  activeEditFunction: EditFunction | null;
-  detectedObjects: DetectedObject[];
-  highlightedObject: DetectedObject | null;
-  zoom: number;
-  compositionLayer: CompositionLayer | null;
-  onCompositionLayerChange: (layer: CompositionLayer | null) => void;
-  referenceImages: ReferenceImage[];
-}
-
-interface ImageEditorRef {
-  getMaskData: () => UploadedImage | null;
-  getMaskAsCanvas: () => HTMLCanvasElement | null;
-  hasMaskData: () => boolean;
-  getOriginalImageSize: () => { width: number, height: number } | null;
-  clearMask: () => void;
-  clearOverlays: () => void;
-}
-
-const ImageEditor = forwardRef<ImageEditorRef, ImageEditorProps>(({ 
-    src, 
-    activeEditFunction, 
-    detectedObjects, 
-    highlightedObject, 
-    zoom,
-    compositionLayer,
-    onCompositionLayerChange,
-    referenceImages
-}, ref) => {
-    const imageCanvasRef = useRef<HTMLCanvasElement>(null);
-    const maskCanvasRef = useRef<HTMLCanvasElement>(null);
-    const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
-    const compositionCanvasRef = useRef<HTMLCanvasElement>(null);
-    const containerRef = useRef<HTMLDivElement>(null);
-    const originalImageSizeRef = useRef<{ width: number, height: number }>({ width: 0, height: 0 });
-    const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
-    const panRef = useRef({ isPanning: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 });
-    
-    const [interaction, setInteraction] = useState<{
-        type: 'move' | 'resize';
-        corner: 'tl' | 'tr' | 'bl' | 'br';
-        startX: number;
-        startY: number;
-        startLayer: CompositionLayer;
-    } | null>(null);
-
-    const clearOverlays = useCallback(() => {
-        const canvas = overlayCanvasRef.current;
-        if (canvas) {
-            const ctx = canvas.getContext('2d');
-            ctx?.clearRect(0, 0, canvas.width, canvas.height);
-        }
-    }, []);
-
-    const clearMask = useCallback(() => {
-        const canvas = maskCanvasRef.current;
-        if (canvas) {
-            const ctx = canvas.getContext('2d');
-            ctx?.clearRect(0, 0, canvas.width, canvas.height);
-        }
-    }, []);
-    
-    useEffect(() => {
-        const image = new Image();
-        image.crossOrigin = "anonymous";
-        image.src = src;
-        image.onload = () => {
-            originalImageSizeRef.current = { width: image.width, height: image.height };
-            setImageDimensions({ width: image.width, height: image.height });
-            
-            const canvases = [imageCanvasRef.current, maskCanvasRef.current, overlayCanvasRef.current, compositionCanvasRef.current];
-            canvases.forEach(canvas => {
-                if(canvas) {
-                    canvas.width = image.width;
-                    canvas.height = image.height;
-                }
-            });
-
-            const ctx = imageCanvasRef.current?.getContext('2d');
-            ctx?.drawImage(image, 0, 0);
-            clearMask();
-            clearOverlays();
-        };
-    }, [src, clearMask, clearOverlays]);
-
-    useEffect(() => {
-        const overlayCanvas = overlayCanvasRef.current;
-        const ctx = overlayCanvas?.getContext('2d');
-        const { width: imgWidth, height: imgHeight } = originalImageSizeRef.current;
-
-        if (!ctx || !overlayCanvas || imgWidth === 0 || !detectedObjects) return;
-
-        ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-
-        detectedObjects.forEach(obj => {
-            const isHighlighted = highlightedObject &&
-                highlightedObject.name === obj.name &&
-                JSON.stringify(highlightedObject.box) === JSON.stringify(obj.box);
-
-            const x = obj.box.x1 * imgWidth;
-            const y = obj.box.y1 * imgHeight;
-            const w = (obj.box.x2 - obj.box.x1) * imgWidth;
-            const h = (obj.box.y2 - obj.box.y1) * imgHeight;
-
-            // Box
-            ctx.strokeStyle = isHighlighted ? '#facc15' : '#3b82f6';
-            ctx.lineWidth = isHighlighted ? 3 : 1.5;
-            ctx.strokeRect(x, y, w, h);
-
-            // Label
-            const label = obj.name;
-            ctx.font = 'bold 14px Inter, sans-serif';
-            const textMetrics = ctx.measureText(label);
-            const textWidth = textMetrics.width;
-            const textHeight = 14;
-            const padding = 4;
-
-            ctx.fillStyle = isHighlighted ? '#facc15' : '#3b82f6';
-            ctx.fillRect(x, y - (textHeight + padding), textWidth + padding * 2, textHeight + padding);
-            
-            ctx.fillStyle = '#1818b0';
-            ctx.fillText(label, x + padding, y - (padding / 2) + 1);
-        });
-
-    }, [detectedObjects, highlightedObject]);
-    
-    useEffect(() => {
-        const container = containerRef.current;
-        if (container) {
-            const canPan = container.scrollWidth > container.clientWidth || container.scrollHeight > container.clientHeight;
-            if (canPan) {
-                container.style.cursor = 'grab';
-            } else {
-                container.style.cursor = 'default';
-            }
-        }
-    }, [imageDimensions, zoom]);
-
-    useEffect(() => {
-        const canvas = compositionCanvasRef.current;
-        const ctx = canvas?.getContext('2d');
-        if (!ctx || !canvas) return;
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        if (compositionLayer && referenceImages) {
-            const refImage = referenceImages[compositionLayer.refIndex];
-            if (!refImage) return;
-
-            const imageToDraw = new Image();
-            imageToDraw.crossOrigin = "anonymous";
-            imageToDraw.src = refImage.previewUrl;
-            imageToDraw.onload = () => {
-                ctx.globalAlpha = 0.7;
-                ctx.drawImage(imageToDraw, compositionLayer.x, compositionLayer.y, compositionLayer.width, compositionLayer.height);
-                ctx.globalAlpha = 1.0;
-
-                ctx.strokeStyle = '#3b82f6';
-                ctx.lineWidth = 1.5 / zoom;
-                ctx.strokeRect(compositionLayer.x, compositionLayer.y, compositionLayer.width, compositionLayer.height);
-                
-                const handleSize = 8 / zoom;
-                ctx.fillStyle = '#3b82f6';
-                const { x, y, width, height } = compositionLayer;
-                ctx.fillRect(x - handleSize / 2, y - handleSize / 2, handleSize, handleSize); // TL
-                ctx.fillRect(x + width - handleSize / 2, y - handleSize / 2, handleSize, handleSize); // TR
-                ctx.fillRect(x - handleSize / 2, y + height - handleSize / 2, handleSize, handleSize); // BL
-                ctx.fillRect(x + width - handleSize / 2, y + height - handleSize / 2, handleSize, handleSize); // BR
-            };
-        }
-    }, [compositionLayer, referenceImages, zoom]);
-
-    useImperativeHandle(ref, () => {
-        const getMaskAsCanvas = () => {
-            const maskCanvas = maskCanvasRef.current;
-            if (!maskCanvas) return null;
-
-            const finalMaskCanvas = document.createElement('canvas');
-            finalMaskCanvas.width = maskCanvas.width;
-            finalMaskCanvas.height = maskCanvas.height;
-            const finalCtx = finalMaskCanvas.getContext('2d', { willReadFrequently: true });
-            if (!finalCtx) return null;
-
-            finalCtx.drawImage(maskCanvas, 0, 0);
-
-            const imageData = finalCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-            const data = imageData.data;
-            let hasMask = false;
-            for (let i = 0; i < data.length; i += 4) {
-                if (data[i + 3] > 10) {
-                    data[i] = 255; data[i + 1] = 255; data[i + 2] = 255; data[i + 3] = 255;
-                    hasMask = true;
-                } else {
-                    data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 255;
-                }
-            }
-
-            if (!hasMask) return null;
-
-            finalCtx.putImageData(imageData, 0, 0);
-            return finalMaskCanvas;
-        };
-        
-        return {
-            getMaskAsCanvas,
-            getMaskData: () => {
-                const finalMaskCanvas = getMaskAsCanvas();
-                if (!finalMaskCanvas) return null;
-                
-                const dataUrl = finalMaskCanvas.toDataURL('image/png');
-                const base64 = dataUrl.split(',')[1];
-                return { base64, mimeType: 'image/png' };
-            },
-            hasMaskData: () => {
-                const maskCanvas = maskCanvasRef.current;
-                if (!maskCanvas) return false;
-                const ctx = maskCanvas.getContext('2d', { willReadFrequently: true });
-                if (!ctx) return false;
-                const imageData = ctx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-                for (let i = 3; i < imageData.data.length; i += 4) {
-                    if (imageData.data[i] > 10) { 
-                        return true;
-                    }
-                }
-                return false;
-            },
-            getOriginalImageSize: () => {
-                return originalImageSizeRef.current.width > 0 ? originalImageSizeRef.current : null;
-            },
-            clearMask,
-            clearOverlays,
-        };
-    });
-    
-    const handleContainerMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-        if (compositionLayer) return; // Prevent panning when composing
-        const container = containerRef.current;
-        if (!container || (container.scrollWidth <= container.clientWidth && container.scrollHeight <= container.clientHeight)) return;
-        e.preventDefault();
-        panRef.current = {
-            isPanning: true, startX: e.pageX - container.offsetLeft, startY: e.pageY - container.offsetTop,
-            scrollLeft: container.scrollLeft, scrollTop: container.scrollTop,
-        };
-        container.style.cursor = 'grabbing';
-    };
-
-    const handleContainerMouseUp = () => {
-         const container = containerRef.current;
-         if(container) {
-            panRef.current.isPanning = false;
-            if (container.scrollWidth > container.clientWidth || container.scrollHeight > container.clientHeight) {
-                 container.style.cursor = 'grab';
-            } else {
-                 container.style.cursor = 'default';
-            }
-         }
-    };
-    
-    const handleContainerMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-        if (!panRef.current.isPanning) return;
-        const container = containerRef.current;
-        if (!container) return;
-
-        e.preventDefault();
-        const x = e.pageX - container.offsetLeft;
-        const y = e.pageY - container.offsetTop;
-        const walkX = (x - panRef.current.startX);
-        const walkY = (y - panRef.current.startY);
-        container.scrollLeft = panRef.current.scrollLeft - walkX;
-        container.scrollTop = panRef.current.scrollTop - walkY;
-    };
-    
-    const getMousePos = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        const canvas = compositionCanvasRef.current;
-        if (!canvas) return { x: 0, y: 0 };
-        const rect = canvas.getBoundingClientRect();
-        const x = (e.clientX - rect.left) / zoom;
-        const y = (e.clientY - rect.top) / zoom;
-        return { x, y };
-    };
-    
-    const handleCompositionMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (!compositionLayer) return;
-        const { x: mouseX, y: mouseY } = getMousePos(e);
-        
-        const { x, y, width, height } = compositionLayer;
-        const handleSize = 8 / zoom;
-        
-        const corners = {
-            tl: { x: x, y: y },
-            tr: { x: x + width, y: y },
-            bl: { x: x, y: y + height },
-            br: { x: x + width, y: y + height },
-        };
-
-        let hitHandle: 'tl' | 'tr' | 'bl' | 'br' | null = null;
-        for (const key of Object.keys(corners) as ('tl' | 'tr' | 'bl' | 'br')[]) {
-            if (mouseX >= corners[key].x - handleSize / 2 && mouseX <= corners[key].x + handleSize / 2 &&
-                mouseY >= corners[key].y - handleSize / 2 && mouseY <= corners[key].y + handleSize / 2) {
-                hitHandle = key;
-                break;
-            }
-        }
-        
-        if (hitHandle) {
-            setInteraction({ type: 'resize', corner: hitHandle, startX: mouseX, startY: mouseY, startLayer: compositionLayer });
-        } else if (mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height) {
-            // @ts-ignore - 'move' doesn't need a corner, but TS complains. Quick fix.
-            setInteraction({ type: 'move', corner: 'tl', startX: mouseX, startY: mouseY, startLayer: compositionLayer });
-        }
-    };
-    
-    const handleCompositionMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (!interaction || !compositionLayer) return;
-        const { x: mouseX, y: mouseY } = getMousePos(e);
-        const dx = mouseX - interaction.startX;
-        const dy = mouseY - interaction.startY;
-        
-        let newLayer = { ...interaction.startLayer };
-
-        if (interaction.type === 'move') {
-            newLayer.x += dx;
-            newLayer.y += dy;
-        } else if (interaction.type === 'resize') {
-             switch (interaction.corner) {
-                case 'br':
-                    newLayer.width += dx;
-                    newLayer.height += dy;
-                    break;
-                case 'bl':
-                    newLayer.x += dx;
-                    newLayer.width -= dx;
-                    newLayer.height += dy;
-                    break;
-                case 'tr':
-                    newLayer.y += dy;
-                    newLayer.width += dx;
-                    newLayer.height -= dy;
-                    break;
-                case 'tl':
-                    newLayer.x += dx;
-                    newLayer.y += dy;
-                    newLayer.width -= dx;
-                    newLayer.height -= dy;
-                    break;
-            }
-            if (newLayer.width < 10) newLayer.width = 10;
-            if (newLayer.height < 10) newLayer.height = 10;
-        }
-        onCompositionLayerChange(newLayer);
-    };
-    
-    const handleCompositionMouseUp = () => {
-        setInteraction(null);
-    };
-
-    return (
-        <div ref={containerRef} 
-             className="w-full h-full overflow-auto flex items-center justify-center bg-zinc-900/50 rounded-lg"
-             onMouseDown={handleContainerMouseDown}
-             onMouseUp={handleContainerMouseUp}
-             onMouseLeave={handleContainerMouseUp}
-             onMouseMove={handleContainerMouseMove}
-        >
-            <div 
-                data-canvas-wrapper="true"
-                className="relative shrink-0"
-                style={{
-                    width: imageDimensions.width * zoom,
-                    height: imageDimensions.height * zoom,
-                }}
-            >
-                <canvas ref={imageCanvasRef} className="absolute top-0 left-0 w-full h-full" />
-                <canvas
-                    ref={maskCanvasRef}
-                    className="absolute top-0 left-0 transition-opacity duration-200 w-full h-full"
-                    style={{ opacity: activeEditFunction === 'compose' ? 0.6 : 0 }}
-                />
-                <canvas
-                    ref={overlayCanvasRef}
-                    className="absolute top-0 left-0 pointer-events-none w-full h-full"
-                />
-                <canvas
-                    ref={compositionCanvasRef}
-                    className="absolute top-0 left-0 w-full h-full"
-                    style={{ cursor: interaction ? 'grabbing' : (compositionLayer ? 'move' : 'default') }}
-                    onMouseDown={handleCompositionMouseDown}
-                    onMouseMove={handleCompositionMouseMove}
-                    onMouseUp={handleCompositionMouseUp}
-                    onMouseLeave={handleCompositionMouseUp}
-                />
-            </div>
-        </div>
-    );
-});
-
-
-interface ConfirmationDialogProps {
-    isOpen: boolean;
-    title: string;
-    message: string;
-    onConfirm: () => void;
-    onCancel: () => void;
-}
-
-const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({ isOpen, title, message, onConfirm, onCancel }) => {
-    if (!isOpen) return null;
-
-    return (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-            <div className="bg-zinc-900 p-6 rounded-lg max-w-sm w-full shadow-xl ring-1 ring-white/10">
-                <h2 className="text-xl font-bold mb-4 text-zinc-100">{title}</h2>
-                <p className="text-zinc-300 mb-6">{message}</p>
-                <div className="flex justify-end gap-3">
-                    <button onClick={onCancel} className="px-4 py-2 text-sm font-semibold rounded-md bg-zinc-800 hover:bg-zinc-700 transition-colors">
-                        Cancelar
-                    </button>
-                    <button onClick={onConfirm} className="px-4 py-2 text-sm font-semibold rounded-md bg-zinc-600 hover:bg-zinc-500 text-white transition-colors">
-                        Confirmar
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-const ImageUploadSlot: React.FC<{
-    id: string;
-    label: string;
-    icon: React.ReactNode;
-    imagePreviewUrl: string | null;
-    onUpload: (file: File) => void;
-    onRemove: () => void;
-    className?: string;
-}> = ({ id, label, icon, imagePreviewUrl, onUpload, onRemove, className = '' }) => {
+const ImageUploadSlot: React.FC<{ id: string; label: string; icon: React.ReactNode; imagePreviewUrl: string | null; onUpload: (file: File) => void; onRemove?: () => void; className?: string; isMultiple?: boolean; }> = ({ id, label, icon, imagePreviewUrl, onUpload, onRemove, className = '', isMultiple = false }) => {
     const [isDragging, setIsDragging] = useState(false);
     const dragCounter = useRef(0);
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => { if (e.target.files) { Array.from(e.target.files).forEach(onUpload); e.target.value = ''; } };
+    const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); dragCounter.current++; setIsDragging(true); };
+    const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); dragCounter.current--; if (dragCounter.current === 0) setIsDragging(false); };
+    const handleDrop = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); dragCounter.current = 0; if (e.dataTransfer.files) Array.from(e.dataTransfer.files).forEach(onUpload); };
 
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            onUpload(e.target.files[0]);
-            e.target.value = '';
-        }
-    };
-
-    const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        e.stopPropagation();
-        dragCounter.current++;
-        setIsDragging(true);
-    };
-
-    const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        e.stopPropagation();
-        dragCounter.current--;
-        if (dragCounter.current === 0) {
-            setIsDragging(false);
-        }
-    };
-
-    const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsDragging(false);
-        dragCounter.current = 0;
-        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-            onUpload(e.dataTransfer.files[0]);
-        }
-    };
-
-    if (imagePreviewUrl) {
+    if (imagePreviewUrl && onRemove) {
         return (
-            <div className={`relative group w-full h-full bg-zinc-800 rounded-md overflow-hidden ${className}`}>
-                <img src={imagePreviewUrl} alt={label} className="w-full h-full object-contain" />
-                <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                    <button onClick={onRemove} className="p-2 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700 transition-colors" title="Remover Imagem">
-                        <Icons.Close />
-                    </button>
+            <div className={`relative group w-full h-full bg-zinc-900 border border-zinc-700 rounded-lg overflow-hidden ${className}`}>
+                <div className="absolute inset-0 flex items-center justify-center p-1 min-w-0 min-h-0">
+                    <img src={imagePreviewUrl} alt={label} className="max-w-full max-h-full object-contain min-w-0" />
+                </div>
+                <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 backdrop-blur-sm">
+                    <button onClick={onRemove} className="p-2 bg-zinc-800 text-red-400 rounded-full hover:bg-zinc-700 transition-colors border border-zinc-600" title="Remover Imagem"><Icons.Close /></button>
                 </div>
             </div>
         );
     }
 
     return (
-        <div
-            onDragEnter={handleDragEnter}
-            onDragLeave={handleDragLeave}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={handleDrop}
-            className={`w-full h-full border-2 rounded-md transition-all duration-200 ${className} ${isDragging ? 'border-blue-500 bg-blue-500/10 border-solid' : 'border-zinc-800 border-dashed'}`}
-        >
-            <input type="file" id={id} className="hidden" accept="image/png, image/jpeg, image/webp" onChange={handleFileChange} />
-            <label htmlFor={id} className="cursor-pointer flex flex-col items-center justify-center h-full text-center p-2 text-zinc-500 hover:text-zinc-400">
-                {icon}
-                <span className="text-xs font-semibold mt-1">{label}</span>
-                <span className="text-xs mt-1">Arraste ou clique</span>
+        <div onDragEnter={handleDragEnter} onDragLeave={handleDragLeave} onDragOver={(e) => e.preventDefault()} onDrop={handleDrop} className={`w-full h-full border-2 rounded-lg transition-all duration-200 flex ${className} ${isDragging ? 'border-blue-500 bg-blue-500/10 border-solid scale-[0.98]' : 'border-zinc-700 border-dashed hover:border-zinc-500 hover:bg-zinc-800/50'}`}>
+            <input type="file" id={id} className="hidden" accept="image/png, image/jpeg, image/webp" onChange={handleFileChange} multiple={isMultiple} />
+            <label htmlFor={id} className="cursor-pointer flex flex-col items-center justify-center h-full w-full text-center p-2 text-zinc-500 hover:text-zinc-300 transition-colors">
+                <div className="mb-2 p-2 bg-zinc-800 rounded-full">{icon}</div>
+                <span className="text-xs font-semibold">{label}</span>
             </label>
         </div>
     );
 };
 
-const getImageDimensions = (url: string): Promise<{ width: number; height: number }> => {
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => resolve({ width: img.width, height: img.height });
-        img.onerror = (err) => reject(err);
-        img.src = url;
-    });
+
+const HistoryCard: React.FC<{ entry: HistoryEntry; index: number; isActive: boolean; onClick: (index: number) => void; }> = ({ entry, index, isActive, onClick }) => (
+    <button
+        key={entry.id}
+        onClick={() => onClick(index)}
+        className={`relative w-full aspect-square rounded-lg overflow-hidden ring-2 transition-all duration-200 ${isActive ? 'ring-blue-500 scale-95 shadow-md' : 'ring-transparent hover:ring-zinc-600 hover:scale-[0.98]'}`}
+        aria-label={`Histórico item ${index + 1}`}
+    >
+        {(entry.mode === 'create' || entry.mode === 'edit') && <img src={entry.imageUrl} alt={entry.prompt} className="w-full h-full object-cover" />}
+        {entry.mode === 'video' && (
+            entry.startFramePreviewUrl ? (
+                <img src={entry.startFramePreviewUrl} alt={entry.prompt} className="w-full h-full object-cover" />
+            ) : (
+                <div className="w-full h-full bg-zinc-900 flex items-center justify-center flex-col gap-1">
+                    <Icons.Video className="text-zinc-600 text-2xl" />
+                    <span className="text-[10px] text-zinc-600 font-mono">VEO 3.1</span>
+                </div>
+            )
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent opacity-60"></div>
+        <span className="absolute bottom-1 right-1 text-[10px] font-bold text-white bg-zinc-900/80 px-1.5 py-0.5 rounded border border-zinc-700">{index + 1}</span>
+    </button>
+);
+
+
+// --- Sidebar Component ---
+const Sidebar: React.FC<{
+    mode: Mode;
+    createState: CreateState;
+    setCreateState: React.Dispatch<React.SetStateAction<CreateState>>;
+    videoState: VideoState;
+    setVideoState: React.Dispatch<React.SetStateAction<VideoState>>;
+    editState: EditState;
+    setEditState: React.Dispatch<React.SetStateAction<EditState>>;
+    prompt: string;
+    setPrompt: (p: string) => void;
+    isLoading: boolean;
+    error: string | null;
+    setError: (e: string | null) => void;
+    history: HistoryEntry[];
+    historyIndex: number;
+    handleHistoryNavigation: (index: number) => void;
+    handleSubmit: (e: React.FormEvent) => void;
+    processSingleFile: (file: File, callback: (image: UploadedImage, previewUrl: string) => void) => void;
+    preMontageState: PreMontageState;
+    setPreMontageState: (state: PreMontageState) => void;
+}> = (props) => {
+    const { mode, createState, setCreateState, videoState, setVideoState, editState, setEditState, prompt, setPrompt, isLoading, error, setError, history, historyIndex, handleHistoryNavigation, handleSubmit, processSingleFile } = props;
+
+    const textareaRef = useAutoResizeTextarea(prompt);
+    
+    const negativePromptValue = mode === 'create' ? createState.negativePrompt : (mode === 'edit' ? editState.negativePrompt : '');
+    const negativeTextareaRef = useAutoResizeTextarea(negativePromptValue);
+    const handleNegativePromptChange = (value: string) => {
+        if (mode === 'create') setCreateState(s => ({ ...s, negativePrompt: value }));
+        else if (mode === 'edit') setEditState(s => ({ ...s, negativePrompt: value }));
+    };
+
+    const renderCreateControls = () => {
+        const { createFunction, aspectRatio, resolution, styleModifier, cameraAngle, lightingStyle, comicColorPalette } = createState;
+        return (
+            <div className="space-y-4">
+                <div className="bg-zinc-900/50 p-2 rounded-lg border border-zinc-800">
+                     <label className="block text-xs font-medium text-blue-400 mb-1.5">Qualidade (Gemini 3)</label>
+                     <div className="custom-select-wrapper">
+                        <select value={resolution} onChange={(e) => setCreateState(s => ({ ...s, resolution: e.target.value as any }))} className="custom-select !bg-zinc-900 !border-zinc-700 focus:!border-blue-500" aria-label="Resolução">
+                            {IMAGE_RESOLUTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                        </select>
+                    </div>
+                </div>
+
+                {STYLE_OPTIONS[createFunction].length > 0 && (
+                    <div>
+                        <label className="block text-xs font-medium text-zinc-400 mb-1">Estilo</label>
+                        <div className="custom-select-wrapper">
+                            <select value={styleModifier} onChange={(e) => setCreateState(s => ({ ...s, styleModifier: e.target.value }))} className="custom-select" aria-label="Estilo">
+                                <option value="default" disabled>Selecione um Estilo</option>
+                                {STYLE_OPTIONS[createFunction].map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                            </select>
+                        </div>
+                    </div>
+                )}
+                 <div>
+                    <label className="block text-xs font-medium text-zinc-400 mb-1">Proporção</label>
+                    <div className="custom-select-wrapper">
+                        <select value={aspectRatio} onChange={(e) => setCreateState(s => ({ ...s, aspectRatio: e.target.value }))} className="custom-select" aria-label="Proporção">
+                            {ALL_SUPPORTED_ASPECT_RATIOS.map((group) => (
+                                <optgroup label={group.label} key={group.label}>{group.options.map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}</optgroup>
+                            ))}
+                        </select>
+                    </div>
+                </div>
+                {(createFunction === 'free' || createFunction === 'comic') && (
+                    <div className="grid grid-cols-2 gap-3 pt-2 border-t border-zinc-800/50">
+                        <div className="col-span-2">
+                            <label className="block text-xs font-medium text-zinc-400 mb-1">Iluminação</label>
+                            <div className="custom-select-wrapper"><select value={lightingStyle} onChange={(e) => setCreateState(s => ({ ...s, lightingStyle: e.target.value }))} className="custom-select" aria-label="Iluminação">{LIGHTING_STYLE_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></div>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-zinc-400 mb-1">Ângulo</label>
+                            <div className="custom-select-wrapper"><select value={cameraAngle} onChange={(e) => setCreateState(s => ({ ...s, cameraAngle: e.target.value }))} className="custom-select" aria-label="Ângulo da Câmera">{CAMERA_ANGLE_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></div>
+                        </div>
+                        {createFunction === 'comic' && (
+                           <div>
+                               <label className="block text-xs font-medium text-zinc-400 mb-1">Paleta</label>
+                               <div className="flex items-center h-[calc(100%-1.125rem)] gap-1 bg-zinc-800 p-1 rounded-md">
+                                   <button onClick={() => setCreateState(s => ({ ...s, comicColorPalette: 'vibrant' }))} className={`w-1/2 text-center text-xs font-semibold py-1 rounded transition-colors ${comicColorPalette === 'vibrant' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700 text-zinc-300'}`}>Vibrante</button>
+                                   <button onClick={() => setCreateState(s => ({ ...s, comicColorPalette: 'noir' }))} className={`w-1/2 text-center text-xs font-semibold py-1 rounded transition-colors ${comicColorPalette === 'noir' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700 text-zinc-300'}`}>Noir</button>
+                               </div>
+                           </div>
+                       )}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    const handleAddReference = (image: UploadedImage, previewUrl: string) => {
+        const newRef: ReferenceLayer = {
+            id: `ref-${Date.now()}`,
+            image,
+            previewUrl,
+            x: 50, y: 50,
+            width: 200, height: 200,
+            rotation: 0,
+            zIndex: editState.references.length,
+        };
+        setEditState(s => ({ ...s, references: [...s.references, newRef], activeReferenceId: newRef.id }));
+    };
+
+    const handleRemoveReference = (id: string) => {
+        setEditState(s => ({...s, references: s.references.filter(r => r.id !== id) }));
+    }
+
+    const handleBringToFront = (id: string) => {
+        const maxZ = Math.max(-1, ...editState.references.map(r => r.zIndex));
+        setEditState(s => ({
+            ...s,
+            references: s.references.map(r => r.id === id ? { ...r, zIndex: maxZ + 1 } : r)
+        }));
+    };
+
+    const renderEditControls = () => {
+        const { backgroundPreviewUrl, references } = editState;
+        const handleBackgroundUpload = (file: File) => {
+            processSingleFile(file, (img, url) => {
+                setEditState(s => ({ ...s, background: img, backgroundPreviewUrl: url, references: [] }));
+            });
+        };
+        const handleBackgroundRemove = () => {
+            setEditState(s => ({ ...s, background: null, backgroundPreviewUrl: null, references: [] }));
+        };
+        
+        return (
+             <div className="space-y-4">
+                <div>
+                    <label className="block text-xs font-medium text-zinc-400 mb-1">Imagens de Base</label>
+                    <div className="flex items-stretch gap-3 h-24">
+                        <div className="w-1/2">
+                            <ImageUploadSlot id="bg-upload" label="Fundo" icon={<Icons.Wallpaper className="text-2xl" />} imagePreviewUrl={backgroundPreviewUrl} onUpload={handleBackgroundUpload} onRemove={handleBackgroundRemove} className="h-full" />
+                        </div>
+                        <div className="w-1/2">
+                            <ImageUploadSlot id="ref-upload" label="Referência" icon={<Icons.AddPhoto className="text-2xl" />} imagePreviewUrl={null} onUpload={(file) => processSingleFile(file, handleAddReference)} className="h-full" isMultiple={true}/>
+                        </div>
+                    </div>
+                </div>
+                
+                {references.length > 0 && (
+                    <div className="space-y-2">
+                        <h4 className="text-xs font-medium text-zinc-400">Camadas</h4>
+                        <ul className="max-h-32 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                            {references.slice().sort((a,b) => b.zIndex - a.zIndex).map(ref => (
+                                <li key={ref.id} className={`flex items-center gap-2 p-1.5 rounded-md transition-colors border border-transparent ${editState.activeReferenceId === ref.id ? 'bg-blue-900/30 border-blue-800' : 'bg-zinc-800 hover:bg-zinc-700'}`}>
+                                    <img src={ref.previewUrl} className="w-8 h-8 object-cover rounded bg-zinc-950" alt="ref thumbnail"/>
+                                    <span className="flex-1 text-xs text-zinc-300 truncate">Camada {ref.zIndex}</span>
+                                    <button onClick={() => handleBringToFront(ref.id)} title="Trazer para frente" className="p-1 hover:bg-zinc-600 rounded text-zinc-400 hover:text-zinc-200"><Icons.BringToFront className="!text-base" /></button>
+                                    <button onClick={() => handleRemoveReference(ref.id)} title="Remover" className="p-1 text-zinc-500 hover:text-red-400 hover:bg-zinc-600 rounded"><Icons.Delete className="!text-base" /></button>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+            </div>
+        )
+    };
+    
+    return (
+        <aside className="app-sidebar bg-zinc-950 border-l border-zinc-800 flex flex-col overflow-hidden shadow-xl z-10">
+            <div className="flex-1 overflow-y-auto min-h-0 custom-scrollbar">
+                <PanelSection title="Configurações" icon={<Icons.Settings />} defaultOpen={true}>
+                    {mode === 'create' && renderCreateControls()}
+                    {mode === 'edit' && renderEditControls()}
+                    {mode === 'video' && (
+                        <div className="space-y-4">
+                             <div className="bg-zinc-900/50 p-2 rounded-lg border border-zinc-800">
+                                <label className="block text-xs font-medium text-blue-400 mb-1.5">Qualidade (Veo 3.1)</label>
+                                <div className="custom-select-wrapper">
+                                    <select value={videoState.videoResolution} onChange={(e) => setVideoState(s => ({ ...s, videoResolution: e.target.value as any }))} className="custom-select !bg-zinc-900 !border-zinc-700 focus:!border-blue-500" aria-label="Resolução de Vídeo">
+                                        {VIDEO_RESOLUTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+                            {videoState.videoFunction === 'animation' && (
+                                <div className="h-32">
+                                    <ImageUploadSlot id="start-frame-upload" label="Imagem Inicial" icon={<Icons.UploadCloud className="text-3xl" />} imagePreviewUrl={videoState.startFramePreviewUrl} onUpload={(file) => processSingleFile(file, (img, url) => setVideoState(s => ({ ...s, startFrame: img, startFramePreviewUrl: url })))} onRemove={() => setVideoState(s => ({ ...s, startFrame: null, startFramePreviewUrl: null }))} className="h-full" />
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </PanelSection>
+                {history.length > 0 && (
+                     <PanelSection title="Histórico" icon={<Icons.History />} defaultOpen={true}>
+                         <div className="grid grid-cols-4 gap-2">
+                             {history.map((entry, index) => (
+                                 <HistoryCard 
+                                    key={entry.id}
+                                    entry={entry}
+                                    index={index}
+                                    isActive={index === historyIndex}
+                                    onClick={handleHistoryNavigation}
+                                 />
+                             ))}
+                         </div>
+                     </PanelSection>
+                 )}
+            </div>
+            <div className="shrink-0 border-t border-zinc-800 bg-zinc-900/50 p-3 space-y-3">
+                {(mode === 'create' || mode === 'edit') && (
+                    <div className="relative">
+                        <div className="absolute -top-2 left-2 bg-zinc-950 px-1 text-[10px] font-bold text-zinc-500">NEGATIVO</div>
+                         <textarea ref={negativeTextareaRef} value={negativePromptValue} onChange={(e) => handleNegativePromptChange(e.target.value)} placeholder="O que evitar..." rows={1} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-xs text-zinc-300 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-red-900 focus:border-red-900 resize-none transition-all" disabled={isLoading} />
+                    </div>
+                )}
+                <div>
+                     <form onSubmit={handleSubmit} className="space-y-3">
+                        <textarea ref={textareaRef} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={ mode === 'create' ? "Descreva sua imaginação em detalhes..." : (mode === 'edit' ? "Descreva as alterações..." : "Descreva a cena do vídeo...") } rows={3} className="w-full bg-zinc-800 rounded-lg p-3 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-600/50 resize-none transition-shadow shadow-inner" disabled={isLoading} />
+                         <button type="submit" disabled={isLoading || (mode === 'edit' && editState.references.length > 0) || !prompt.trim()} className="w-full flex items-center justify-center gap-2 py-3 px-3 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg text-white font-bold hover:from-blue-500 hover:to-indigo-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-900/30 active:scale-[0.98]">
+                             {isLoading ? <Icons.Spinner /> : <Icons.Sparkles className="!text-lg" />}<span>{mode === 'create' ? 'Gerar 3.0' : (mode === 'video' ? 'Gerar Veo' : 'Editar')}</span>
+                         </button>
+                    </form>
+                     {error && <div className="mt-2 p-2 bg-red-950/50 border border-red-900/50 text-red-300 text-xs rounded-lg flex items-start gap-2 animate-fadeIn"><Icons.AlertCircle className="shrink-0 mt-0.5 !text-base text-red-500" /><span>{error}</span><button onClick={() => setError(null)} className="ml-auto p-0.5 text-red-400 hover:text-white"><Icons.Close className="!text-base" /></button></div>}
+                </div>
+            </div>
+        </aside>
+    );
 };
 
-const getAspectRatioString = (width: number, height: number): string => {
-    const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
-    const commonDivisor = gcd(width, height);
-    return `${width / commonDivisor}:${height / commonDivisor}`;
+// --- Interactive Canvas Components ---
+const ReferenceItem: React.FC<{
+    item: ReferenceLayer;
+    isSelected: boolean;
+    onSelect: (id: string, e: React.MouseEvent) => void;
+    onUpdate: (id: string, updates: Partial<ReferenceLayer>) => void;
+}> = ({ item, isSelected, onSelect, onUpdate }) => {
+    const ref = useRef<HTMLDivElement>(null);
+    // Use a ref to hold the latest item state to avoid stale closures in event listeners
+    const itemStateRef = useRef(item);
+    useEffect(() => {
+        itemStateRef.current = item;
+    }, [item]);
+
+    // Effect for handling dragging logic
+    useEffect(() => {
+        const handle = ref.current;
+        if (!isSelected || !handle) return;
+
+        const onDragMouseDown = (e: MouseEvent) => {
+            // Do not start a drag if a resize handle was the target
+            if ((e.target as HTMLElement).dataset.resizeHandle) return;
+            e.stopPropagation();
+
+            const startMouse = { x: e.clientX, y: e.clientY };
+            const initialPos = { x: itemStateRef.current.x, y: itemStateRef.current.y };
+            
+            const onDragMouseMove = (moveEvent: MouseEvent) => {
+                const dx = moveEvent.clientX - startMouse.x;
+                const dy = moveEvent.clientY - startMouse.y;
+                onUpdate(itemStateRef.current.id, { x: initialPos.x + dx, y: initialPos.y + dy });
+            };
+
+            const onDragMouseUp = () => {
+                window.removeEventListener('mousemove', onDragMouseMove);
+                window.removeEventListener('mouseup', onDragMouseUp);
+            };
+
+            window.addEventListener('mousemove', onDragMouseMove);
+            window.addEventListener('mouseup', onDragMouseUp);
+        };
+        
+        handle.addEventListener('mousedown', onDragMouseDown);
+        
+        return () => {
+            handle.removeEventListener('mousedown', onDragMouseDown);
+        };
+    }, [isSelected, onUpdate]);
+
+    // Handler for starting a resize operation
+    const handleResizeMouseDown = (e: React.MouseEvent, handleName: string) => {
+        e.stopPropagation();
+        e.preventDefault();
+
+        const startMouse = { x: e.clientX, y: e.clientY };
+        const { x, y, width, height } = itemStateRef.current;
+        const aspectRatio = width / height;
+
+        const onResizeMouseMove = (moveEvent: MouseEvent) => {
+            const dx = moveEvent.clientX - startMouse.x;
+            const dy = moveEvent.clientY - startMouse.y;
+            const updates: Partial<ReferenceLayer> = {};
+
+            let newWidth: number;
+
+            // Determine new width based on the primary axis of mouse movement to feel natural
+            if (Math.abs(dx) > Math.abs(dy)) {
+                newWidth = width + (handleName.includes('w') ? -dx : dx);
+            } else {
+                const heightChange = height + (handleName.includes('n') ? -dy : dy);
+                newWidth = heightChange * aspectRatio;
+            }
+            
+            newWidth = Math.max(20, newWidth);
+            const newHeight = newWidth / aspectRatio;
+            
+            updates.width = newWidth;
+            updates.height = newHeight;
+
+            // Adjust position for handles on the top or left edges
+            if (handleName.includes('n')) {
+                updates.y = y + (height - newHeight);
+            }
+            if (handleName.includes('w')) {
+                updates.x = x + (width - newWidth);
+            }
+            
+            onUpdate(itemStateRef.current.id, updates);
+        };
+
+        const onResizeMouseUp = () => {
+            window.removeEventListener('mousemove', onResizeMouseMove);
+            window.removeEventListener('mouseup', onResizeMouseUp);
+        };
+
+        window.addEventListener('mousemove', onResizeMouseMove);
+        window.addEventListener('mouseup', onResizeMouseUp);
+    };
+
+    const resizeHandles = [
+        { name: 'nw', className: 'cursor-nwse-resize -top-1.5 -left-1.5' },
+        { name: 'ne', className: 'cursor-nesw-resize -top-1.5 -right-1.5' },
+        { name: 'sw', className: 'cursor-nesw-resize -bottom-1.5 -left-1.5' },
+        { name: 'se', className: 'cursor-nwse-resize -bottom-1.5 -right-1.5' },
+    ];
+    
+    return (
+        <div
+            ref={ref}
+            onMouseDown={(e) => onSelect(item.id, e)}
+            className="absolute"
+            style={{
+                left: `${item.x}px`,
+                top: `${item.y}px`,
+                width: `${item.width}px`,
+                height: `${item.height}px`,
+                transform: `rotate(${item.rotation}deg)`,
+                zIndex: item.zIndex,
+                cursor: 'pointer',
+            }}
+        >
+            <img src={item.previewUrl} alt={`ref-${item.id}`} className="w-full h-full object-contain pointer-events-none select-none" />
+            {isSelected && (
+                <>
+                    <div className="absolute -inset-0.5 border-2 border-blue-500 pointer-events-none" style={{ cursor: 'move' }}></div>
+                    {resizeHandles.map(handle => (
+                         <div
+                            key={handle.name}
+                            data-resize-handle={handle.name}
+                            onMouseDown={(e) => handleResizeMouseDown(e, handle.name)}
+                            className={`absolute w-3 h-3 bg-white border border-blue-500 rounded-full ${handle.className}`}
+                         />
+                    ))}
+                </>
+            )}
+        </div>
+    );
 };
 
-const ALL_SUPPORTED_ASPECT_RATIOS = [
-    { label: 'Quadrado', options: ['1:1'] },
-    { label: 'Paisagem (Horizontal)', options: ['16:9', '4:3'] },
-    { label: 'Retrato (Vertical)', options: ['9:16', '3:4'] },
-];
+const InteractiveCanvas: React.FC<{
+    editState: EditState;
+    setEditState: React.Dispatch<React.SetStateAction<EditState>>;
+    canvasRef: React.RefObject<HTMLDivElement>;
+    onConfirm: () => void;
+    onCancel: () => void;
+}> = ({ editState, setEditState, canvasRef, onConfirm, onCancel }) => {
+    const [zoom, setZoom] = useState(1);
+    const [pan, setPan] = useState({ x: 0, y: 0 });
+    const containerRef = useRef<HTMLDivElement>(null);
+    const isPanningRef = useRef(false);
+    const lastMousePosRef = useRef({ x: 0, y: 0 });
+    const isSpacebarDownRef = useRef(false);
 
-const FILTERS = [
-    { name: 'Noir', prompt: "Aplique um filtro noir preto e branco de alto contraste e dramático à imagem, com sombras profundas e realces brilhantes." },
-    { name: 'Sépia', prompt: "Converta a imagem para um tom sépia quente, dando-lhe uma aparência de fotografia antiga e vintage." },
-    { name: 'Vívido', prompt: "Realce as cores da imagem para torná-las mais vibrantes e saturadas. Aumente ligeiramente o contraste geral." },
-    { name: 'Sonhador', prompt: "Aplique um efeito etéreo e sonhador à imagem com foco suave, um brilho delicado e cores pastel ligeiramente dessaturadas." },
-    { name: 'Cyberpunk', prompt: "Transforme a imagem com uma estética cyberpunk, apresentando azuis, rosas e roxos neon na iluminação, alto contraste e uma sensação futurista e urbana." },
-    { name: 'Aquarela', prompt: "Converta a imagem para que pareça uma pintura em aquarela, com bordas suaves, cores mescladas e uma aparência de papel texturizado." },
-];
+    const handleSelect = (id: string, e: React.MouseEvent) => {
+        e.stopPropagation();
+        setEditState(s => ({ ...s, activeReferenceId: id }));
+    };
 
-const CREATE_FUNCTIONS: { id: CreateFunction, name: string, icon: React.ReactNode }[] = [
-    { id: 'free', name: 'Livre', icon: <Icons.Image /> },
-    { id: 'sticker', name: 'Sticker', icon: <Icons.Sticker /> },
-    { id: 'text', name: 'Texto / Logo', icon: <Icons.Type /> },
-    { id: 'comic', name: 'HQ', icon: <Icons.Comic /> },
-];
+    const handleDeselect = () => {
+        setEditState(s => ({ ...s, activeReferenceId: null }));
+    };
 
-const EDIT_FUNCTIONS: { id: EditFunction, name: string, icon: React.ReactNode }[] = [
-    { id: 'compose', name: 'Compor', icon: <Icons.Layers /> },
-    { id: 'style', name: 'Estilizar', icon: <Icons.Palette /> },
-];
+    const handleUpdate = useCallback((id: string, updates: Partial<ReferenceLayer>) => {
+        setEditState(s => ({
+            ...s,
+            references: s.references.map(ref => (ref.id === id ? { ...ref, ...updates } : ref)),
+        }));
+    }, [setEditState]);
 
-const VIDEO_FUNCTIONS: { id: VideoFunction, name: string, icon: React.ReactNode }[] = [
-    { id: 'prompt', name: 'A Partir de Prompt', icon: <Icons.Prompt /> },
-    { id: 'animation', name: 'Animar Imagem', icon: <Icons.Start /> },
-];
+    const fitToScreen = useCallback(() => {
+        const container = containerRef.current;
+        const content = canvasRef.current;
+        const bgImage = content?.querySelector('img');
+
+        if (!container || !content || !bgImage || bgImage.clientWidth === 0 || bgImage.clientHeight === 0) {
+            return;
+        }
+
+        const containerWidth = container.clientWidth;
+        const containerHeight = container.clientHeight;
+        const contentWidth = bgImage.clientWidth;
+        const contentHeight = bgImage.clientHeight;
+
+        if (contentWidth === 0 || contentHeight === 0) return;
+
+        const scaleX = containerWidth / contentWidth;
+        const scaleY = containerHeight / contentHeight;
+
+        const newZoom = Math.min(scaleX, scaleY) * 0.9; // 90% padding
+        const newPanX = (containerWidth - contentWidth * newZoom) / 2;
+        const newPanY = (containerHeight - contentHeight * newZoom) / 2;
+
+        setZoom(newZoom);
+        setPan({ x: newPanX, y: newPanY });
+    }, [canvasRef]);
+
+    useEffect(() => {
+        setTimeout(fitToScreen, 50);
+    }, [fitToScreen, editState.backgroundPreviewUrl]);
+
+    const handleZoom = (direction: 'in' | 'out') => {
+        const container = containerRef.current;
+        if (!container) return;
+    
+        const { width, height } = container.getBoundingClientRect();
+        const centerX = width / 2;
+        const centerY = height / 2;
+    
+        // Position on content before zoom
+        const contentX = (centerX - pan.x) / zoom;
+        const contentY = (centerY - pan.y) / zoom;
+    
+        const zoomFactor = 1.2;
+        const newZoom = direction === 'in' ? zoom * zoomFactor : zoom / zoomFactor;
+        const clampedZoom = Math.max(0.1, Math.min(newZoom, 10)); // Clamp zoom level
+    
+        // New pan to keep the content point under the cursor
+        const newPanX = centerX - contentX * clampedZoom;
+        const newPanY = centerY - contentY * clampedZoom;
+    
+        setZoom(clampedZoom);
+        setPan({ x: newPanX, y: newPanY });
+    };
+
+    // Effect for spacebar panning
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if ((e.target as HTMLElement).tagName.match(/INPUT|TEXTAREA/)) return;
+            if (e.code === 'Space' && !isSpacebarDownRef.current) {
+                e.preventDefault();
+                isSpacebarDownRef.current = true;
+                if (!isPanningRef.current) {
+                    container.style.cursor = 'grab';
+                }
+            }
+        };
+
+        const handleKeyUp = (e: KeyboardEvent) => {
+            if (e.code === 'Space') {
+                isSpacebarDownRef.current = false;
+                if (!isPanningRef.current) {
+                    container.style.cursor = 'default';
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
+
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('keyup', handleKeyUp);
+            if (container) container.style.cursor = 'default';
+        };
+    }, []);
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                e.preventDefault();
+
+                if (editState.activeReferenceId) {
+                    const moveAmount = e.shiftKey ? 10 : 1;
+                    let dx = 0;
+                    let dy = 0;
+
+                    switch (e.key) {
+                        case 'ArrowUp': dy = -moveAmount; break;
+                        case 'ArrowDown': dy = moveAmount; break;
+                        case 'ArrowLeft': dx = -moveAmount; break;
+                        case 'ArrowRight': dx = moveAmount; break;
+                    }
+                    
+                    const activeRef = editState.references.find(r => r.id === editState.activeReferenceId);
+                    if (activeRef) {
+                        handleUpdate(editState.activeReferenceId, {
+                            x: activeRef.x + dx,
+                            y: activeRef.y + dy,
+                        });
+                    }
+                } else { // Pan canvas if no item is selected
+                    const panAmount = e.shiftKey ? 50 : 10;
+                    let dx = 0;
+                    let dy = 0;
+                    switch (e.key) {
+                        case 'ArrowUp': dy = panAmount; break;
+                        case 'ArrowDown': dy = -panAmount; break;
+                        case 'ArrowLeft': dx = panAmount; break;
+                        case 'ArrowRight': dx = -panAmount; break;
+                    }
+                    setPan(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [editState.activeReferenceId, editState.references, handleUpdate]);
+    
+    const handleMouseDownCapture = (e: React.MouseEvent) => {
+        if (isSpacebarDownRef.current) {
+            e.preventDefault();
+            e.stopPropagation();
+            isPanningRef.current = true;
+            lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+            (e.currentTarget as HTMLElement).style.cursor = 'grabbing';
+        }
+    };
+
+    const handleMouseMove = (e: React.MouseEvent) => {
+        if (!isPanningRef.current) return;
+        const dx = e.clientX - lastMousePosRef.current.x;
+        const dy = e.clientY - lastMousePosRef.current.y;
+        setPan(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+        lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+    };
+
+    const handleMouseUp = (e: React.MouseEvent) => {
+        if (isPanningRef.current) {
+            isPanningRef.current = false;
+            (e.currentTarget as HTMLElement).style.cursor = isSpacebarDownRef.current ? 'grab' : 'default';
+        }
+    };
+
+    return (
+        <div
+            ref={containerRef}
+            className="relative w-full h-full flex items-center justify-center p-4 bg-[#050505] overflow-hidden"
+            onMouseDownCapture={handleMouseDownCapture}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+            onClick={handleDeselect}
+        >
+            <div className="absolute top-4 right-4 z-10 flex flex-col items-center gap-2 p-1.5 bg-zinc-900/80 rounded-lg backdrop-blur-sm shadow-xl border border-zinc-800">
+                <button onClick={() => handleZoom('in')} className="p-2 hover:bg-zinc-700 rounded-md transition-colors text-zinc-300" title="Aumentar Zoom"><Icons.ZoomIn /></button>
+                <span className="text-xs font-semibold text-zinc-300 w-12 text-center select-none">{Math.round(zoom * 100)}%</span>
+                <button onClick={() => handleZoom('out')} className="p-2 hover:bg-zinc-700 rounded-md transition-colors text-zinc-300" title="Diminuir Zoom"><Icons.ZoomOut /></button>
+                <div className="h-px w-5 bg-zinc-700 my-1"></div>
+                <button onClick={fitToScreen} className="p-2 hover:bg-zinc-700 rounded-md transition-colors text-zinc-300" title="Ajustar à Tela"><Icons.FitScreen /></button>
+            </div>
+            <div
+                className="transition-transform duration-100 ease-out"
+                style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+            >
+                <div ref={canvasRef} className="relative select-none" style={{ touchAction: 'none' }} onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
+                    <img src={editState.backgroundPreviewUrl!} alt="Fundo" className="block max-w-full max-h-full object-contain pointer-events-none select-none" />
+                    {editState.references.map(ref => (
+                        <ReferenceItem
+                            key={ref.id}
+                            item={ref}
+                            isSelected={editState.activeReferenceId === ref.id}
+                            onSelect={handleSelect}
+                            onUpdate={handleUpdate}
+                        />
+                    ))}
+                </div>
+            </div>
+            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center justify-center gap-4 py-3 px-5 bg-zinc-900/90 rounded-full backdrop-blur-md shadow-2xl border border-zinc-800/50">
+                <button onClick={onCancel} className="py-2 px-4 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 rounded-full transition-colors flex items-center gap-2"><Icons.Close /> Cancelar</button>
+                <button onClick={onConfirm} className="py-2 px-6 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-full transition-colors flex items-center gap-2 shadow-lg shadow-blue-900/50 disabled:opacity-50 disabled:cursor-not-allowed"><Icons.Check /> Confirmar Montagem</button>
+            </div>
+        </div>
+    );
+};
+
+const ImageDisplayWithActions: React.FC<{ imageUrl: string; prompt: string; }> = ({ imageUrl, prompt }) => {
+    const handleDownload = () => {
+        const link = document.createElement('a');
+        link.href = imageUrl;
+        // Create a user-friendly filename from the prompt
+        const filename = (prompt || 'imagem')
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]/g, '') // remove special chars
+            .replace(/\s+/g, '-') // replace spaces with hyphens
+            .slice(0, 50); // limit length
+        link.download = `${filename || 'nano-banana-studio'}.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
+    return (
+        <div className="relative w-full h-full flex items-center justify-center p-6 group bg-[#09090b]">
+             <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-zinc-900/40 to-zinc-950 pointer-events-none"></div>
+            <img key={imageUrl} src={imageUrl} alt={prompt} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl ring-1 ring-white/10 z-10" />
+            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-all duration-300 z-20 translate-y-4 group-hover:translate-y-0">
+                <button 
+                    onClick={handleDownload}
+                    className="flex items-center gap-2 py-2.5 px-6 bg-white text-black font-semibold rounded-full hover:bg-zinc-200 transition-colors shadow-xl transform hover:scale-105"
+                    title="Baixar imagem"
+                >
+                    <Icons.Save className="text-black" />
+                    <span>Baixar Original</span>
+                </button>
+            </div>
+        </div>
+    );
+};
+
+// --- Main Content Display Component (Stable) ---
+const MainContentDisplay: React.FC<{
+    isLoading: boolean;
+    loadingMessage: string;
+    currentEntry: HistoryEntry | null;
+    mode: Mode;
+    editState: EditState;
+    setEditState: React.Dispatch<React.SetStateAction<EditState>>;
+    canvasRef: React.RefObject<HTMLDivElement>;
+    onConfirm: () => void;
+    onCancel: () => void;
+}> = ({ isLoading, loadingMessage, currentEntry, mode, editState, setEditState, canvasRef, onConfirm, onCancel }) => {
+    if (isLoading) {
+        return (
+            <div className="flex flex-col items-center justify-center h-full text-center text-zinc-400 p-8 bg-zinc-950">
+                <div className="relative mb-8">
+                    <div className="absolute inset-0 bg-blue-500 blur-2xl opacity-20 animate-pulse"></div>
+                    <Icons.Spinner className="h-12 w-12 text-blue-500 relative z-10" />
+                </div>
+                <p className="text-xl font-semibold text-zinc-100 mb-2 animate-pulse">{loadingMessage}</p>
+                <div className="flex items-center justify-center mt-4 gap-2">
+                    <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0s' }}></div>
+                    <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                    <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                </div>
+            </div>
+        );
+    }
+
+    if (currentEntry?.mode === 'video') {
+        return (
+            <div className="w-full h-full flex items-center justify-center p-4 bg-[#09090b]">
+                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-indigo-900/10 via-zinc-950 to-zinc-950 pointer-events-none"></div>
+                <video key={currentEntry.videoUrl} src={currentEntry.videoUrl} controls autoPlay loop className="max-w-full max-h-full rounded-lg shadow-2xl ring-1 ring-white/10 z-10" />
+            </div>
+        );
+    }
+    
+    const imageToShow = currentEntry?.mode === 'edit' ? currentEntry.imageUrl : (currentEntry?.mode === 'create' ? currentEntry.imageUrl : null);
+
+    if (mode === 'edit' && editState.backgroundPreviewUrl) {
+        if (editState.references.length > 0) {
+            return <InteractiveCanvas editState={editState} setEditState={setEditState} canvasRef={canvasRef} onConfirm={onConfirm} onCancel={onCancel} />;
+        }
+         // Show the latest generated image if available, otherwise the background.
+        const displayUrl = imageToShow || editState.backgroundPreviewUrl;
+        const displayPrompt = currentEntry?.prompt || 'Imagem editada';
+        return <ImageDisplayWithActions imageUrl={displayUrl} prompt={displayPrompt} />;
+    }
+
+    if (imageToShow) {
+        return <ImageDisplayWithActions imageUrl={imageToShow} prompt={currentEntry.prompt} />;
+    }
+
+    let placeholderText = "Selecione uma ferramenta à esquerda e descreva sua imagem no painel à direita.";
+    if (mode === 'video') {
+        placeholderText = "Crie vídeos impressionantes com Veo 3.1. Selecione uma ferramenta e comece.";
+    } else if (mode === 'edit') {
+        placeholderText = "Envie uma imagem de fundo e referências, depois descreva as edições no painel à direita.";
+    }
+
+    return (
+        <div className="flex flex-col items-center justify-center flex-1 text-center text-zinc-500 p-8 m-4">
+             <div className="p-6 rounded-2xl bg-zinc-900/30 border border-zinc-800/50 mb-6 shadow-inner">
+                <Icons.Sparkles className="text-6xl text-zinc-700 mb-0" />
+             </div>
+            <h2 className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400 mb-3">Nano Banana Studio <span className="text-sm font-mono text-zinc-600 ml-2">v3.0</span></h2>
+            <p className="max-w-md text-zinc-400 leading-relaxed">{placeholderText}</p>
+        </div>
+    );
+};
 
 
+// --- Main App Component ---
 export default function App() {
-    const [prompt, setPrompt] = useState<string>('');
+    const [prompt, setPrompt] = useState('');
     const [mode, setMode] = useState<Mode>('create');
     const [history, setHistory] = useState<HistoryEntry[]>([]);
-    const [historyIndex, setHistoryIndex] = useState<number>(-1);
+    const [historyIndex, setHistoryIndex] = useState(-1);
     
-    const [activeCreateFunction, setActiveCreateFunction] = useState<CreateFunction>('free');
-    const [aspectRatio, setAspectRatio] = useState<string>('1:1');
-    const [negativePrompt, setNegativePrompt] = useState<string>('');
-    const [styleModifier, setStyleModifier] = useState<string>('default');
-    const [cameraAngle, setCameraAngle] = useState<string>('default');
-    const [lightingStyle, setLightingStyle] = useState<string>('default');
-    const [comicColorPalette, setComicColorPalette] = useState<'vibrant' | 'noir'>('vibrant');
+    const [createState, setCreateState] = useState<CreateState>(INITIAL_CREATE_STATE);
+    const [videoState, setVideoState] = useState<VideoState>(INITIAL_VIDEO_STATE);
+    const [editState, setEditState] = useState<EditState>(INITIAL_EDIT_STATE);
+    const [preMontageState, setPreMontageState] = useState<PreMontageState>(null);
 
-    const [activeEditFunction, setActiveEditFunction] = useState<EditFunction>('compose');
-    const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
-    const [styleStrength, setStyleStrength] = useState<number>(100);
-    const [detectedObjects, setDetectedObjects] = useState<DetectedObject[]>([]);
-    const [highlightedObject, setHighlightedObject] = useState<DetectedObject | null>(null);
-    const [currentImageDimensions, setCurrentImageDimensions] = useState<{w: number, h: number} | null>(null);
-    const [compositionLayer, setCompositionLayer] = useState<CompositionLayer | null>(null);
-    
-    const [activeVideoFunction, setActiveVideoFunction] = useState<VideoFunction>('prompt');
-    const [startFrame, setStartFrame] = useState<UploadedImage | null>(null);
-    const [startFramePreview, setStartFramePreview] = useState<string | null>(null);
-
-    const [isLoading, setIsLoading] = useState<boolean>(false);
-    const [loadingMessage, setLoadingMessage] = useState<string>('Gerando sua mídia...');
-    const [isAnalyzingStyle, setIsAnalyzingStyle] = useState<boolean>(false);
-    const [isDetectingObjects, setIsDetectingObjects] = useState<boolean>(false);
+    const [isLoading, setIsLoading] = useState(false);
+    const [loadingMessage, setLoadingMessage] = useState('Gerando sua mídia...');
     const [error, setError] = useState<string | null>(null);
-    const [showMobileModal, setShowMobileModal] = useState<boolean>(false);
-    const [isDragging, setIsDragging] = useState<boolean>(false);
+    const [showMobileModal, setShowMobileModal] = useState(false);
     const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([]);
-    const [confirmationDialog, setConfirmationDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
-    const [zoom, setZoom] = useState(1);
-    const [isFitToScreen, setIsFitToScreen] = useState(true);
         
-    const editorRef = useRef<ImageEditorRef>(null);
-    const mainContentRef = useRef<HTMLDivElement>(null);
-    const dragCounter = useRef(0);
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const negativeTextareaRef = useRef<HTMLTextAreaElement>(null);
-
     const currentEntry = history[historyIndex] ?? null;
-    const generatedImage = currentEntry?.imageUrl ?? null;
-    const generatedVideo = currentEntry?.videoUrl ?? null;
-
-    const styleOptions: Record<CreateFunction, { value: string, label: string }[]> = {
-        free: [],
-        sticker: [ { value: 'cartoon', label: 'Desenho' }, { value: 'vintage', label: 'Vintage' }, { value: 'holographic', label: 'Holográfico' }, { value: 'embroidered patch', label: 'Bordado' }, ],
-        text: [ { value: 'minimalist', label: 'Minimalista' }, { value: 'corporate', label: 'Corporativo' }, { value: 'playful', label: 'Divertido' }, { value: 'geometric', label: 'Geométrico' }, ],
-        comic: [ { value: 'American comic book', label: 'Americano' }, { value: 'Japanese manga', label: 'Mangá' }, { value: 'franco-belgian comics (bande dessinée)', label: 'Franco-Belga' }, ],
-    };
-    const cameraAngleOptions = [ { value: 'default', label: 'Padrão' }, { value: 'eye-level', label: 'Nível do Olhar' }, { value: 'close-up', label: 'Close-up' }, { value: 'low angle', label: 'Ângulo Baixo' }, { value: 'high angle (bird\'s-eye view)', label: 'Plano Alto' }, { value: 'wide shot (long shot)', label: 'Plano Geral' }, ];
-    const lightingStyleOptions = [ { value: 'default', label: 'Padrão' }, { value: 'cinematic', label: 'Cinemática' }, { value: 'soft', label: 'Luz Suave' }, { value: 'dramatic', label: 'Dramática' }, { value: 'studio', label: 'Estúdio' }, { value: 'natural', label: 'Natural' }, ];
-    
-    const closeConfirmationDialog = () => setConfirmationDialog(prev => ({ ...prev, isOpen: false }));
-    const handleConfirm = () => { confirmationDialog.onConfirm(); closeConfirmationDialog(); };
-    const resetDetectionState = useCallback(() => { setDetectedObjects([]); setHighlightedObject(null); editorRef.current?.clearOverlays(); }, []);
-
-    const fitZoomToScreen = useCallback(() => {
-        if (!mainContentRef.current || !currentImageDimensions) return;
-        const PADDING = 32;
-        const container = mainContentRef.current;
-        const containerWidth = container.clientWidth - PADDING;
-        const containerHeight = container.clientHeight - PADDING;
-        const { w: imageWidth, h: imageHeight } = currentImageDimensions;
-        if (containerWidth <= 0 || containerHeight <= 0 || imageWidth <= 0 || imageHeight <= 0) {
-            setZoom(1); return;
-        }
-        const scaleX = containerWidth / imageWidth;
-        const scaleY = containerHeight / imageHeight;
-        const newZoom = Math.min(scaleX, scaleY);
-        setZoom(prevZoom => Math.abs(prevZoom - newZoom) > 0.001 ? newZoom : prevZoom);
-    }, [currentImageDimensions]);
+    const editCanvasRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        if (isFitToScreen || !generatedImage) {
-            fitZoomToScreen();
+        if (window.innerWidth < 1024) {
+            setShowMobileModal(true);
         }
-    }, [isFitToScreen, generatedImage, fitZoomToScreen]);
-
-    useEffect(() => {
-        const container = mainContentRef.current;
-        if (!container) return;
-        const resizeObserver = new ResizeObserver(() => {
-            if (isFitToScreen) {
-                fitZoomToScreen();
-            }
-        });
-        resizeObserver.observe(container);
-        return () => resizeObserver.disconnect();
-    }, [isFitToScreen, fitZoomToScreen]);
-
-    const handleZoom = (factor: number) => {
-        setIsFitToScreen(false);
-        setZoom(prev => Math.max(0.1, Math.min(prev * factor, 5)));
-    };
-    
-    const handleFitToScreen = () => setIsFitToScreen(true);
-
-    useEffect(() => {
-        if (generatedImage) {
-            getImageDimensions(generatedImage).then(({ width, height }) => {
-                setCurrentImageDimensions({ w: width, h: height });
-            }).catch(err => {
-                console.error("Could not get image dimensions:", err);
-                setCurrentImageDimensions(null);
-            });
-        } else {
-            setCurrentImageDimensions(null);
-        }
-    }, [generatedImage]);
-
-    const resetImages = () => {
-        setReferenceImages([]);
-        setStartFrame(null);
-        setStartFramePreview(null);
-        resetDetectionState();
-        setCompositionLayer(null);
-    };
-
-    const isEditStateDirty = useCallback(() => {
-        if (mode !== 'edit' || !generatedImage) return false;
-        const hasMask = editorRef.current?.hasMaskData() ?? false;
-        const hasPrompt = prompt.trim() !== '';
-        const hasRefImages = referenceImages.length > 0;
-        return hasMask || hasPrompt || hasRefImages;
-    }, [mode, generatedImage, prompt, referenceImages]);
+    }, []);
 
     const handleModeToggle = (newMode: Mode) => {
         if (newMode === mode) return;
-        const latestImage = history[historyIndex]?.imageUrl;
-        const performSwitch = (targetMode: Mode) => {
-            setMode(targetMode);
-            resetImages(); setHistory([]); setHistoryIndex(-1); setPrompt(''); setNegativePrompt('');
-            switch (targetMode) {
-                case 'create': setActiveCreateFunction('free'); break;
-                case 'edit': setActiveEditFunction('compose'); break;
-                case 'video': setActiveVideoFunction('prompt'); break;
-            }
-        };
-        const performSwitchToEdit = () => {
-            setMode('edit');
-            setActiveEditFunction('compose');
-            resetImages();
-            if (latestImage) {
-                const currentEntry = history[historyIndex];
-                setHistory([currentEntry]);
-                setHistoryIndex(0);
-                setPrompt(currentEntry.prompt);
-                setNegativePrompt(currentEntry.negativePrompt || '');
-            } else {
-                setHistory([]); setHistoryIndex(-1); setPrompt(''); setNegativePrompt('');
-            }
-        };
-        const performSwitchToVideoWithAnimation = () => {
-            if (!latestImage) { performSwitch('video'); return; }
-            setMode('video'); resetImages(); setPrompt(''); setNegativePrompt(''); setActiveVideoFunction('animation');
-            const base64 = latestImage.split(',')[1];
-            const mimeType = latestImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
-            setStartFrame({ base64, mimeType }); setStartFramePreview(latestImage);
-        };
-        if (mode === 'edit' && history.length > 0 && newMode !== 'edit') {
-            const isContinuingToVideo = newMode === 'video';
-            const onConfirmAction = isContinuingToVideo ? performSwitchToVideoWithAnimation : () => performSwitch(newMode);
-            const dialogMessage = isContinuingToVideo ? "Isso irá transferir sua imagem atual para o modo de vídeo para animação. Deseja continuar?" : "Ao sair do modo de edição, a imagem atual e seu histórico serão perdidos. Deseja continuar?";
-            const dialogTitle = isContinuingToVideo ? 'Mudar para o Modo de Vídeo?' : 'Sair do Modo de Edição?';
-            setConfirmationDialog({ isOpen: true, title: dialogTitle, message: dialogMessage, onConfirm: onConfirmAction });
-            return;
-        }
-        if (newMode === 'edit') { performSwitchToEdit(); }
-        else if (newMode === 'video' && activeVideoFunction === 'animation') { performSwitchToVideoWithAnimation(); }
-        else { performSwitch(newMode); }
+        setMode(newMode);
+        setHistory([]);
+        setHistoryIndex(-1);
+        setPrompt('');
+        setError(null);
+        setCreateState(INITIAL_CREATE_STATE);
+        setVideoState(INITIAL_VIDEO_STATE);
+        setEditState(INITIAL_EDIT_STATE);
+        setPreMontageState(null);
     };
     
     const handleHistoryNavigation = useCallback((index: number) => {
         if (index < 0 || index >= history.length) return;
+        setPreMontageState(null);
         const entry = history[index];
-        if (!entry) return;
-        resetDetectionState();
-        setCompositionLayer(null);
         setHistoryIndex(index);
         setPrompt(entry.prompt);
-        setNegativePrompt(entry.negativePrompt || '');
         setMode(entry.mode);
         if (entry.mode === 'create') {
-            setActiveCreateFunction(entry.createFunction!);
-            setAspectRatio(entry.aspectRatio!);
-            setComicColorPalette(entry.comicColorPalette || 'vibrant');
-            setStyleModifier(entry.styleModifier || 'default');
-            setCameraAngle(entry.cameraAngle || 'default');
-            setLightingStyle(entry.lightingStyle || 'default');
-            resetImages(); 
-        } else if (entry.mode === 'edit') { 
-            setActiveEditFunction(entry.editFunction!);
-            setReferenceImages(entry.referenceImages || []);
-            if (entry.editFunction === 'style' && entry.styleStrength) { setStyleStrength(entry.styleStrength); }
+            const { id, imageUrl, ...rest } = entry;
+            setCreateState(rest);
+            setVideoState(INITIAL_VIDEO_STATE);
+            setEditState(INITIAL_EDIT_STATE);
         } else if (entry.mode === 'video') {
-            setActiveVideoFunction(entry.videoFunction || 'prompt');
-            setStartFrame(entry.startFrame || null);
-            setStartFramePreview(entry.startFramePreviewUrl || null);
+            const { id, videoUrl, ...rest } = entry;
+            setVideoState(rest);
+            setCreateState(INITIAL_CREATE_STATE);
+            setEditState(INITIAL_EDIT_STATE);
+        } else if (entry.mode === 'edit') {
+            const { id, imageUrl, ...rest } = entry;
+            setEditState({ ...INITIAL_EDIT_STATE, ...rest });
+            setCreateState(INITIAL_CREATE_STATE);
+            setVideoState(INITIAL_VIDEO_STATE);
         }
-    }, [history, resetDetectionState]);
+    }, [history]);
 
     const handleCreateFunctionClick = (func: CreateFunction) => {
-        setActiveCreateFunction(func);
-        const options = styleOptions[func];
-        setStyleModifier(options.length > 0 ? options[0].value : 'default');
-    };
-
-    const handleEditFunctionClick = (func: EditFunction) => {
-        if (func !== activeEditFunction) {
-            setReferenceImages([]);
-            setCompositionLayer(null);
-        }
-        setActiveEditFunction(func);
+        setCreateState(s => ({ ...s, createFunction: func, styleModifier: STYLE_OPTIONS[func][0]?.value || 'default' }));
     };
 
     const handleVideoFunctionClick = (func: VideoFunction) => {
-        if (func !== activeVideoFunction) { setStartFrame(null); setStartFramePreview(null); }
-        setActiveVideoFunction(func);
+        if (func !== videoState.videoFunction) {
+            setVideoState({ ...INITIAL_VIDEO_STATE, videoFunction: func });
+        }
+    };
+    
+    const handleEditFunctionClick = (func: EditFunction) => {
+        if (func !== editState.editFunction) {
+            setEditState({ ...INITIAL_EDIT_STATE, editFunction: func });
+        }
     };
 
     const processSingleFile = useCallback((file: File, callback: (image: UploadedImage, previewUrl: string) => void) => {
         const id = `upload-${file.name}-${Date.now()}`;
-        if (file.size > 10 * 1024 * 1024) {
-            setUploadProgress(prev => [...prev, { id, name: file.name, progress: 100, status: 'error', message: 'Excede 10MB.' }]);
-            setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
-            return;
-        }
-        if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-            setUploadProgress(prev => [...prev, { id, name: file.name, progress: 100, status: 'error', message: 'Tipo inválido.' }]);
-            setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
-            return;
-        }
+        if (file.size > 10 * 1024 * 1024) { setUploadProgress(prev => [...prev, { id, name: file.name, progress: 100, status: 'error', message: 'Excede 10MB.' }]); setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000); return; }
+        if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) { setUploadProgress(prev => [...prev, { id, name: file.name, progress: 100, status: 'error', message: 'Tipo inválido.' }]); setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000); return; }
         setUploadProgress(prev => [...prev, { id, name: file.name, progress: 0, status: 'uploading' }]);
         const reader = new FileReader();
-        reader.onprogress = (event) => {
-            if (event.lengthComputable) {
-                const progress = Math.round((event.loaded / event.total) * 100);
-                setUploadProgress(p => p.map(item => item.id === id ? { ...item, progress } : item));
-            }
-        };
-        reader.onerror = () => {
-            setUploadProgress(p => p.map(item => item.id === id ? { ...item, status: 'error', message: 'Falha ao ler.' } : item));
-            setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000);
-        };
+        reader.onprogress = (event) => { if (event.lengthComputable) setUploadProgress(p => p.map(item => item.id === id ? { ...item, progress: Math.round((event.loaded / event.total) * 100) } : item)); };
+        reader.onerror = () => { setUploadProgress(p => p.map(item => item.id === id ? { ...item, status: 'error', message: 'Falha ao ler.' } : item)); setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 5000); };
         reader.onload = () => {
             const dataUrl = reader.result as string;
-            const uploadedImage: UploadedImage = { base64: dataUrl.split(',')[1], mimeType: file.type };
-            callback(uploadedImage, dataUrl);
+            callback({ base64: dataUrl.split(',')[1], mimeType: file.type }, dataUrl);
             setUploadProgress(p => p.map(item => item.id === id ? { ...item, status: 'success', progress: 100 } : item));
             setTimeout(() => setUploadProgress(p => p.filter(item => item.id !== id)), 1500);
         };
         reader.readAsDataURL(file);
     }, []);
-    
-    const handleFileDropOnCanvas = (files: FileList) => {
-        if (mode !== 'edit' || !files || files.length === 0) return;
 
-        const processMainImage = (file: File) => {
-            processSingleFile(file, (uploadedImage, dataUrl) => {
-                const initialEntry: HistoryEntry = { id: `hist-${Date.now()}`, imageUrl: dataUrl, prompt: '', mode: 'edit', editFunction: activeEditFunction, referenceImages: [] };
-                resetDetectionState();
-                setCompositionLayer(null);
-                setHistory([initialEntry]);
-                setHistoryIndex(0);
-                setReferenceImages([]);
-                setPrompt('');
-            });
-        };
+    const flattenEditCanvas = async (): Promise<UploadedImage> => {
+        const canvasContainer = editCanvasRef.current;
 
-        if (generatedImage && isEditStateDirty()) {
-            setConfirmationDialog({
-                isOpen: true,
-                title: 'Substituir Imagem Principal?',
-                message: 'Isso substituirá a imagem atual e limpará o histórico de edições. Deseja continuar?',
-                onConfirm: () => processMainImage(files[0]),
-            });
-        } else {
-            processMainImage(files[0]);
+        if (!canvasContainer || !editState.background || !editState.backgroundPreviewUrl) {
+            throw new Error("A tela de edição ou a imagem de fundo não estão disponíveis.");
         }
-    };
 
-    const handleMainImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files.length > 0) {
-            handleFileDropOnCanvas(e.target.files);
-            e.target.value = ''; // Reset file input
+        const imgElement = canvasContainer.querySelector('img');
+        if (!imgElement) {
+            throw new Error("A imagem de fundo não foi encontrada na tela.");
         }
-    };
-    
-    const handleRemoveReferenceImage = (indexToRemove: number) => {
-        setReferenceImages(prev => prev.filter((_, index) => index !== indexToRemove));
-        if (compositionLayer?.refIndex === indexToRemove) {
-            setCompositionLayer(null);
-        }
-        if (activeEditFunction === 'style') setPrompt('');
-    };
-
-    const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); };
-    const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); dragCounter.current++; if (dragCounter.current === 1) setIsDragging(true); };
-    const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); dragCounter.current--; if (dragCounter.current === 0) setIsDragging(false); };
-    
-    const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsDragging(false);
-        dragCounter.current = 0;
-    
-        const jsonData = e.dataTransfer.getData('application/json');
-        if (jsonData) {
-            if (!mainContentRef.current || !generatedImage || !editorRef.current) return;
-
-            const { index: refIndex } = JSON.parse(jsonData);
-            const referenceImage = referenceImages[refIndex];
-            if (!referenceImage || !referenceImage.mask) {
-                setError("Objeto de referência inválido ou sem máscara. Não pode ser posicionado.");
-                return;
-            }
-    
-            const canvasWrapper = mainContentRef.current.querySelector('[data-canvas-wrapper="true"]') as HTMLElement;
-            if (!canvasWrapper) return;
-            const canvasWrapperRect = canvasWrapper.getBoundingClientRect();
-    
-            if (
-                e.clientX < canvasWrapperRect.left || e.clientX > canvasWrapperRect.right ||
-                e.clientY < canvasWrapperRect.top || e.clientY > canvasWrapperRect.bottom
-            ) {
-                return; 
-            }
-    
-            const xInCanvas = (e.clientX - canvasWrapperRect.left) + (canvasWrapper.parentElement?.scrollLeft || 0);
-            const yInCanvas = (e.clientY - canvasWrapperRect.top) + (canvasWrapper.parentElement?.scrollTop || 0);
         
-            const originalX = xInCanvas / zoom;
-            const originalY = yInCanvas / zoom;
+        // Use the image's clientWidth, which is its rendered size without transforms.
+        const renderedWidth = imgElement.clientWidth;
+        const renderedHeight = imgElement.clientHeight;
 
-            try {
-                const maskImage = await new Promise<HTMLImageElement>((resolve, reject) => {
-                    const img = new Image();
-                    img.onload = () => resolve(img);
-                    img.onerror = reject;
-                    img.src = `data:${referenceImage.mask!.mimeType};base64,${referenceImage.mask!.base64}`;
-                });
-    
-                const initialWidth = maskImage.width;
-                const initialHeight = maskImage.height;
-    
-                setCompositionLayer({
-                    refIndex,
-                    x: originalX - initialWidth / 2,
-                    y: originalY - initialHeight / 2,
-                    width: initialWidth,
-                    height: initialHeight,
-                });
-                setError(null);
-            } catch (err) {
-                setError("Não foi possível carregar a máscara do objeto de referência.");
-                console.error(err);
-            }
-
-        } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-            handleFileDropOnCanvas(e.dataTransfer.files);
-        }
-    };
-    
-    const handleConfirmComposition = async () => {
-        if (!compositionLayer || !generatedImage) return;
-    
-        setIsLoading(true);
-        setLoadingMessage("Compondo as imagens...");
-        setError(null);
-    
-        try {
-            const originalSize = editorRef.current?.getOriginalImageSize();
-            if (!originalSize) throw new Error("Não foi possível obter o tamanho da imagem original.");
-    
-            const refImage = referenceImages[compositionLayer.refIndex];
-            if (!refImage.mask) throw new Error("A máscara da imagem de referência não foi encontrada.");
-    
-            const maskImage = await new Promise<HTMLImageElement>((resolve, reject) => {
-                const img = new Image();
-                img.onload = () => resolve(img);
-                img.onerror = reject;
-                img.src = `data:${refImage.mask.mimeType};base64,${refImage.mask.base64}`;
-            });
-            
-            const destMaskCanvas = document.createElement('canvas');
-            destMaskCanvas.width = originalSize.width;
-            destMaskCanvas.height = originalSize.height;
-            const ctx = destMaskCanvas.getContext('2d');
-            if (!ctx) throw new Error("Não foi possível criar o contexto do canvas da máscara.");
-            
-            ctx.fillStyle = 'black';
-            ctx.fillRect(0, 0, originalSize.width, originalSize.height);
-    
-            ctx.drawImage(maskImage, compositionLayer.x, compositionLayer.y, compositionLayer.width, compositionLayer.height);
-    
-            const destMaskDataUrl = destMaskCanvas.toDataURL('image/png');
-            const destMask: UploadedImage = {
-                base64: destMaskDataUrl.split(',')[1],
-                mimeType: 'image/png'
-            };
-    
-            const mainImageBase64 = generatedImage.split(',')[1];
-            const mainImageMimeType = generatedImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
-            const mainImage: UploadedImage = { base64: mainImageBase64, mimeType: mainImageMimeType };
-            
-            const compositionPrompt = `Usando a imagem de referência, coloque seu objeto principal na imagem principal no local indicado pela máscara de edição. Misture-o perfeitamente, ajustando iluminação, sombras, escala e perspectiva. O objeto da imagem de referência deve parecer pertencer naturalmente à cena principal.`;
-    
-            const resultImageUrl = await processImagesWithPrompt(
-                compositionPrompt, mainImage, [refImage], destMask, 'compose',
-                originalSize, styleStrength, negativePrompt
-            );
-            if (resultImageUrl.startsWith('A edição foi bloqueada')) { throw new Error(resultImageUrl); }
-    
-            const newHistoryEntry: HistoryEntry = {
-                id: `hist-${Date.now()}`, imageUrl: resultImageUrl, 
-                prompt: `Composição de imagem`,
-                negativePrompt, mode: 'edit', editFunction: 'compose',
-                referenceImages: [...referenceImages],
-            };
-    
-            setHistory(prev => {
-                const newHistory = prev.slice(0, historyIndex + 1);
-                newHistory.push(newHistoryEntry);
-                return newHistory;
-            });
-            setHistoryIndex(prev => prev + 1);
-            editorRef.current?.clearMask();
-            resetDetectionState();
-            setCompositionLayer(null);
-    
-        } catch (e: any) {
-            setError(e.message || "Ocorreu um erro durante a composição.");
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    const handleDetectObjects = async () => {
-        if (!generatedImage || isDetectingObjects) return;
-        setIsDetectingObjects(true); setError(null);
-        try {
-            const base64 = generatedImage.split(',')[1];
-            const mimeType = generatedImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
-            const detected = await detectObjects({ base64, mimeType });
-            setDetectedObjects(detected);
-        } catch (e: any) { setError(e.message); } finally { setIsDetectingObjects(false); }
-    };
-
-    const handleGenerateObjectMask = async (object: DetectedObject) => {
-        if (!generatedImage) return;
-        setError(null); setHighlightedObject(object);
-        const newReferenceImages = [...referenceImages];
-        const newRef: ReferenceImage = { image: { base64: '', mimeType: '' }, previewUrl: '', mask: null, isExtractingObject: true };
-        newReferenceImages.push(newRef);
-        const newIndex = newReferenceImages.length - 1;
-        setReferenceImages(newReferenceImages);
-        try {
-            const base64 = generatedImage.split(',')[1];
-            const mimeType = generatedImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
-            const tempCanvas = document.createElement('canvas');
-            const img = new Image();
-            img.src = generatedImage;
-            await new Promise(resolve => img.onload = resolve);
-            tempCanvas.width = img.width; tempCanvas.height = img.height;
-            const ctx = tempCanvas.getContext('2d');
-            if (!ctx) throw new Error("Could not create canvas context");
-            const { x1, y1, x2, y2 } = object.box;
-            const cropX = x1 * img.width, cropY = y1 * img.height, cropW = (x2 - x1) * img.width, cropH = (y2 - y1) * img.height;
-            ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-            const croppedDataUrl = tempCanvas.toDataURL(mimeType);
-            const croppedImage: UploadedImage = { base64: croppedDataUrl.split(',')[1], mimeType: mimeType };
-            const mask = await generateObjectMask(croppedImage);
-            const maskUrl = `data:${mask.mimeType};base64,${mask.base64}`;
-            setReferenceImages(prev => prev.map((ref, index) => index === newIndex ? { image: croppedImage, previewUrl: croppedDataUrl, mask: mask, maskedObjectPreviewUrl: maskUrl, isExtractingObject: false } : ref));
-        } catch (e: any) {
-            setError(e.message);
-            setReferenceImages(prev => prev.filter((_, index) => index !== newIndex));
-        } finally {
-            setHighlightedObject(null);
-        }
-    };
-    
-    const applyFilter = (filterPrompt: string) => {
-        if (!generatedImage) { setError("Por favor, gere ou envie uma imagem primeiro para aplicar um filtro."); return; }
-        setPrompt(filterPrompt); handleSubmit(new Event('submit') as any); 
-    };
-
-    const handleBananaClick = async () => {
-        if (mode !== 'create' || isLoading) return;
-
-        setError(null);
-        setIsLoading(true);
-        setLoadingMessage('Gerando sua banana especial...');
-
-        try {
-            const easterEggPrompt = "Uma banana com faixas verde e amarela em volta dela.";
-            
-            const imageUrl = await generateImage(
-                easterEggPrompt,
-                activeCreateFunction,
-                aspectRatio,
-                negativePrompt,
-                styleModifier,
-                cameraAngle,
-                lightingStyle,
-                comicColorPalette
-            );
-            
-            const newHistoryEntry: HistoryEntry = {
-                id: `hist-${Date.now()}`,
-                imageUrl,
-                prompt: easterEggPrompt,
-                negativePrompt,
-                mode: 'create',
-                createFunction: activeCreateFunction,
-                aspectRatio,
-                comicColorPalette: activeCreateFunction === 'comic' ? comicColorPalette : undefined,
-                styleModifier,
-                cameraAngle,
-                lightingStyle
-            };
-
-            setHistory(prev => {
-                const newHistory = prev.slice(0, historyIndex + 1);
-                newHistory.push(newHistoryEntry);
-                return newHistory;
-            });
-            setHistoryIndex(prev => prev + 1);
-            
-            setReferenceImages([]);
-            resetDetectionState();
-            setCompositionLayer(null);
-            editorRef.current?.clearMask();
-
-        } catch (e: any) {
-            setError(e.message || "A banana tropeçou! Ocorreu um erro.");
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-
-    const handleSubmit = async (e: React.FormEvent<HTMLFormElement> | React.MouseEvent<HTMLButtonElement>) => {
-        e.preventDefault(); setError(null);
-        if (isLoading) return;
-        
-        // Handle active composition via separate button
-        if (compositionLayer) {
-            setError("Confirme ou cancele a posição do objeto antes de gerar uma nova imagem.");
-            return;
+        if (renderedWidth === 0 || renderedHeight === 0) {
+            throw new Error("As dimensões da imagem de fundo não puderam ser calculadas.");
         }
 
-        let newHistoryEntry: HistoryEntry;
-        try {
-            if (mode === 'create') {
-                if (!prompt) { setError("Por favor, insira um prompt para gerar uma imagem."); return; }
-                setIsLoading(true); setLoadingMessage('Gerando sua imagem...');
-                const imageUrl = await generateImage(prompt, activeCreateFunction, aspectRatio, negativePrompt, styleModifier, cameraAngle, lightingStyle, comicColorPalette);
-                newHistoryEntry = { id: `hist-${Date.now()}`, imageUrl, prompt, negativePrompt, mode, createFunction: activeCreateFunction, aspectRatio, comicColorPalette: activeCreateFunction === 'comic' ? comicColorPalette : undefined, styleModifier, cameraAngle, lightingStyle };
-            } else if (mode === 'edit') {
-                if (!generatedImage) { setError("Por favor, envie uma imagem para começar a editar."); return; }
-                const mainImageBase64 = generatedImage.split(',')[1];
-                const mainImageMimeType = generatedImage.match(/data:(image\/[^;]+);/)?.[1] || 'image/png';
-                const mainImage: UploadedImage = { base64: mainImageBase64, mimeType: mainImageMimeType };
-                const maskData = editorRef.current?.getMaskData() || null;
-                const originalSize = editorRef.current?.getOriginalImageSize() || null;
-                if (!prompt && referenceImages.length === 0 && !maskData) { setError("Descreva sua edição, adicione uma imagem de referência ou selecione uma área para editar."); return; }
-                setIsLoading(true); setLoadingMessage('Aplicando sua edição...');
-                const resultImageUrl = await processImagesWithPrompt(prompt, mainImage, referenceImages, maskData, activeEditFunction, originalSize, styleStrength, negativePrompt);
-                if (resultImageUrl.startsWith('A edição foi bloqueada')) { throw new Error(resultImageUrl); }
-                newHistoryEntry = { id: `hist-${Date.now()}`, imageUrl: resultImageUrl, prompt, negativePrompt, mode, editFunction: activeEditFunction, referenceImages: [...referenceImages], styleStrength: activeEditFunction === 'style' ? styleStrength : undefined };
-            } else if (mode === 'video') {
-                if (!prompt) { setError("Por favor, insira um prompt para gerar um vídeo."); return; }
-                if (activeVideoFunction === 'animation' && !startFrame) { setError("Por favor, envie uma imagem inicial para a animação."); return; }
-                setIsLoading(true); setLoadingMessage('A geração de vídeo pode levar alguns minutos...');
-                const videoUrl = await generateVideo(prompt, startFrame || undefined);
-                newHistoryEntry = { id: `hist-${Date.now()}`, videoUrl, prompt, mode, videoFunction: activeVideoFunction, startFrame: startFrame || undefined, startFramePreviewUrl: startFramePreview || undefined };
-            } else { return; }
-            setHistory(prev => {
-                const newHistory = prev.slice(0, historyIndex + 1);
-                newHistory.push(newHistoryEntry);
-                return newHistory;
-            });
-            setHistoryIndex(prev => prev + 1);
-            setReferenceImages([]); resetDetectionState(); editorRef.current?.clearMask();
-        } catch (e: any) { setError(e.message || "Ocorreu um erro desconhecido."); } finally { setIsLoading(false); }
-    };
-    
-    useEffect(() => {
-        [textareaRef, negativeTextareaRef].forEach(ref => {
-            const textarea = ref.current;
-            if (textarea) { textarea.style.height = 'auto'; textarea.style.height = `${textarea.scrollHeight}px`; }
+        // Load the background image to get its natural dimensions
+        const bgImg = new Image();
+        bgImg.src = editState.backgroundPreviewUrl;
+        await new Promise<void>((resolve, reject) => { 
+            bgImg.onload = () => resolve(); 
+            bgImg.onerror = () => reject(new Error("Não foi possível carregar a imagem de fundo."));
         });
-    }, [prompt, negativePrompt]);
 
-    useEffect(() => { if (window.innerWidth < 1024) setShowMobileModal(true); }, []);
+        // Create canvas with natural dimensions
+        const canvas = document.createElement('canvas');
+        canvas.width = bgImg.naturalWidth;
+        canvas.height = bgImg.naturalHeight;
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(bgImg, 0, 0);
 
-    const canUndo = historyIndex > 0;
-    const canRedo = historyIndex < history.length - 1;
+        // Calculate scale factor between rendered size and natural size
+        const scaleX = canvas.width / renderedWidth;
+        const scaleY = canvas.height / renderedHeight;
 
-    const MainContentDisplay = () => {
-        if (isLoading) {
-            return (
-                <div className="flex flex-col items-center justify-center h-full text-center text-zinc-400 p-8">
-                    <Icons.Spinner className="h-10 w-10 mb-6 text-blue-500" />
-                    <p className="text-lg font-semibold text-zinc-200 mb-2">{loadingMessage}</p>
-                    <div className="flex items-center justify-center mt-2">
-                        <div className="w-2 h-2 bg-zinc-500 rounded-full animate-pulse-dots dot-1"></div>
-                        <div className="w-2 h-2 bg-zinc-500 rounded-full mx-2 animate-pulse-dots dot-2"></div>
-                        <div className="w-2 h-2 bg-zinc-500 rounded-full animate-pulse-dots dot-3"></div>
-                    </div>
-                </div>
-            );
+        const sortedRefs = [...editState.references].sort((a, b) => a.zIndex - b.zIndex);
+        
+        for (const ref of sortedRefs) {
+            const refImg = new Image();
+            refImg.src = ref.previewUrl;
+            await new Promise((resolve, reject) => { refImg.onload = resolve; refImg.onerror = reject; });
+            
+            // ref.x/y are relative to the container, which is what we need.
+            // Scale the position and size of the reference layer to the full-size canvas.
+            const canvasX = ref.x * scaleX;
+            const canvasY = ref.y * scaleY;
+            const canvasWidth = ref.width * scaleX;
+            const canvasHeight = ref.height * scaleY;
+            
+            ctx.save();
+            // Translate to the center of the reference image for rotation
+            ctx.translate(canvasX + canvasWidth / 2, canvasY + canvasHeight / 2);
+            ctx.rotate(ref.rotation * Math.PI / 180);
+            // Draw the image centered on the new origin
+            ctx.drawImage(refImg, -canvasWidth / 2, -canvasHeight / 2, canvasWidth, canvasHeight);
+            ctx.restore();
         }
-        if (generatedVideo) {
-             return (
-                <div className="w-full flex-1 flex items-center justify-center">
-                     <video key={generatedVideo} src={generatedVideo} controls autoPlay loop className="max-w-full max-h-full rounded-lg shadow-lg" />
-                 </div>
-             );
+
+        const dataUrl = canvas.toDataURL('image/png');
+        return { base64: dataUrl.split(',')[1], mimeType: 'image/png' };
+    };
+
+    const handleConfirmMontage = async () => {
+        setIsLoading(true);
+        setLoadingMessage('Finalizando a montagem...');
+        setError(null);
+
+        const currentReferences = [...editState.references];
+        
+        try {
+            const flattenedImage = await flattenEditCanvas();
+            setEditState(s => ({ ...s, references: [] }));
+
+            setLoadingMessage('Processando com Gemini Flash 2.5...');
+            const API_PROMPT = "Integre os objetos das camadas de referência à imagem de fundo de forma realista. Remova o fundo dos objetos, ajuste a iluminação, sombras e cores para que a composição pareça natural e coesa, como se fosse uma única foto.";
+            const resultUrl = await editImage(API_PROMPT, flattenedImage);
+            const newBgImage = { base64: resultUrl.split(',')[1], mimeType: 'image/png' };
+            const userFacingPrompt = 'Montagem automática de imagem';
+
+            const newEntry: EditHistoryEntry = {
+                id: `hist-${Date.now()}`,
+                prompt: userFacingPrompt,
+                mode: 'edit',
+                imageUrl: resultUrl,
+                editFunction: editState.editFunction,
+                background: editState.background,
+                backgroundPreviewUrl: editState.backgroundPreviewUrl,
+                references: currentReferences,
+                negativePrompt: editState.negativePrompt,
+            };
+            
+            const newHistory = history.slice(0, historyIndex + 1).concat(newEntry);
+            setHistory(newHistory);
+            setHistoryIndex(newHistory.length - 1);
+            setPrompt(userFacingPrompt);
+            setEditState(s => ({...s, background: newBgImage, backgroundPreviewUrl: resultUrl, references: []}));
+
+        } catch (e: any) {
+            setError(e.message || "Ocorreu um erro desconhecido ao editar a imagem.");
+            setEditState(s => ({ ...s, references: currentReferences })); // Restore on error
+        } finally {
+            setIsLoading(false);
+            setLoadingMessage('Gerando sua mídia...');
         }
-        if (generatedImage) {
-            return (
-                <div className="w-full flex-1 relative">
-                    <ImageEditor
-                        ref={editorRef} key={generatedImage} src={generatedImage} 
-                        activeEditFunction={mode === 'edit' ? activeEditFunction : null}
-                        detectedObjects={detectedObjects} highlightedObject={highlightedObject} 
-                        zoom={zoom}
-                        compositionLayer={compositionLayer}
-                        onCompositionLayerChange={setCompositionLayer}
-                        referenceImages={referenceImages}
-                    />
-                </div>
-            );
+    };
+    
+    const handleCancelMontage = () => {
+        setEditState(s => ({ ...s, references: [], activeReferenceId: null }));
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (isLoading || (mode === 'edit' && editState.references.length > 0)) return;
+
+        setError(null);
+        setIsLoading(true);
+
+        const currentPrompt = prompt.trim();
+        if (!currentPrompt) {
+             if (mode === 'video' && videoState.videoFunction === 'animation' && videoState.startFrame) {
+                // Allow animation without prompt
+             } else {
+                setError("Por favor, insira um prompt.");
+                setIsLoading(false);
+                return;
+             }
         }
-        return (
-            mode === 'edit' ? (
-                <>
-                    <input
-                        type="file"
-                        id="main-image-upload"
-                        className="hidden"
-                        accept="image/png, image/jpeg, image/webp"
-                        onChange={handleMainImageUpload}
-                        disabled={isLoading}
-                    />
-                    <label htmlFor="main-image-upload" className="flex flex-col items-center justify-center flex-1 text-center text-zinc-500 p-8 border-2 border-dashed border-zinc-800 rounded-lg cursor-pointer hover:border-blue-500 hover:text-blue-400 transition-colors duration-200 group">
-                        <Icons.Sparkles className="text-6xl text-zinc-700 mb-4 transition-colors group-hover:text-blue-500" />
-                        <h2 className="text-xl font-bold text-zinc-400 mb-2 transition-colors group-hover:text-blue-400">Bem-vindo ao Nano Banana Studio</h2>
-                        <p className="max-w-md">
-                            Arraste uma imagem ou clique nesta área para começar a editar.
-                        </p>
-                    </label>
-                </>
-            ) : (
-                <div className="flex flex-col items-center justify-center flex-1 text-center text-zinc-500 p-8 border-2 border-dashed border-zinc-800 rounded-lg">
-                    <Icons.Sparkles className="text-6xl text-zinc-700 mb-4" />
-                    <h2 className="text-xl font-bold text-zinc-400 mb-2">Bem-vindo ao Nano Banana Studio</h2>
-                    <p className="max-w-md">
-                       {mode === 'create' && "Selecione uma ferramenta à esquerda e descreva sua imagem no painel à direita."}
-                       {mode === 'video' && "Selecione uma ferramenta de vídeo e use o painel à direita para gerar."}
-                    </p>
-                </div>
-            )
-        );
+        
+        try {
+            let newEntry: HistoryEntry | null = null;
+            if (mode === 'create') {
+                setLoadingMessage(`Criando sua imagem em ${createState.resolution}...`);
+                const resultUrl = await generateImage({ prompt: currentPrompt, ...createState });
+                newEntry = { id: `hist-${Date.now()}`, prompt: currentPrompt, mode, imageUrl: resultUrl, ...createState };
+            } else if (mode === 'video') {
+                if (videoState.videoFunction === 'animation' && !videoState.startFrame) throw new Error("Por favor, envie uma imagem para animar.");
+                setLoadingMessage(`Renderizando com Veo 3.1 (${videoState.videoResolution})...`);
+                const resultUrl = await generateVideo(currentPrompt, videoState.videoFunction === 'animation' ? videoState.startFrame! : undefined, videoState.videoResolution);
+                newEntry = { id: `hist-${Date.now()}`, prompt: currentPrompt, mode, videoUrl: resultUrl, ...videoState };
+            } else if (mode === 'edit') {
+                 if (!editState.background) throw new Error("Por favor, envie uma imagem de fundo para editar.");
+                setLoadingMessage('Aplicando edições com IA...');
+                const resultUrl = await editImage(currentPrompt, editState.background);
+                const newBgImage = { base64: resultUrl.split(',')[1], mimeType: 'image/png' };
+                newEntry = { id: `hist-${Date.now()}`, prompt: currentPrompt, mode, imageUrl: resultUrl, editFunction: editState.editFunction, background: newBgImage, backgroundPreviewUrl: resultUrl, references: [], negativePrompt: editState.negativePrompt };
+                setEditState(s => ({...s, background: newBgImage, backgroundPreviewUrl: resultUrl, references: []}));
+            }
+
+            if (newEntry) {
+                const newHistory = history.slice(0, historyIndex + 1).concat(newEntry);
+                setHistory(newHistory);
+                setHistoryIndex(newHistory.length - 1);
+            }
+        } catch (e: any) {
+            setError(e.message || "Ocorreu um erro desconhecido.");
+        } finally {
+            setIsLoading(false);
+            setLoadingMessage('Gerando sua mídia...');
+        }
     };
 
     return (
         <>
             {showMobileModal && (
-                <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 text-center">
-                    <div className="bg-zinc-900 p-6 rounded-lg max-w-sm w-full shadow-xl ring-1 ring-white/10">
-                        <h2 className="text-xl font-bold mb-4 text-zinc-100">Otimizado para Desktop</h2>
-                        <p className="text-zinc-300">Para a melhor experiência, por favor, acesse este aplicativo em um computador desktop.</p>
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                    <div className="bg-zinc-900 rounded-lg p-6 text-center max-w-sm border border-zinc-700 shadow-2xl">
+                        <h2 className="text-xl font-bold text-zinc-100 mb-2">Experiência Otimizada para Desktop</h2>
+                        <p className="text-zinc-400">Para utilizar todo o poder do Gemini 3 no Nano Banana Studio, recomendamos um computador.</p>
+                        <button onClick={() => setShowMobileModal(false)} className="mt-4 py-2 px-4 bg-blue-600 text-white rounded-md font-semibold">Entendi</button>
                     </div>
                 </div>
             )}
-            <ConfirmationDialog isOpen={confirmationDialog.isOpen} title={confirmationDialog.title} message={confirmationDialog.message} onConfirm={handleConfirm} onCancel={closeConfirmationDialog} />
-
-            <header className="app-header bg-zinc-900 border-b border-zinc-800 flex items-center justify-between px-4">
-                <div className="flex items-center gap-4">
-                    <button 
-                        onClick={handleBananaClick}
-                        className={`text-2xl transition-transform hover:scale-110 ${mode === 'create' && !isLoading ? 'cursor-pointer' : 'cursor-default opacity-50'}`}
-                        title={mode === 'create' ? "Clique para uma surpresa!" : "Disponível apenas no modo CRIAR"}
-                        disabled={isLoading || mode !== 'create'}
-                    >
-                        🍌
-                    </button>
-                    <div className="grid grid-cols-3 gap-1 bg-zinc-800 p-1 rounded-md">
-                         <button onClick={() => handleModeToggle('create')} className={`flex items-center justify-center px-4 py-1 text-xs font-bold rounded ${mode === 'create' ? 'bg-blue-600 text-white' : 'hover:bg-zinc-700'}`}>CRIAR</button>
-                         <button onClick={() => handleModeToggle('edit')} className={`flex items-center justify-center px-4 py-1 text-xs font-bold rounded ${mode === 'edit' ? 'bg-blue-600 text-white' : 'hover:bg-zinc-700'}`}>EDITAR</button>
-                         <button onClick={() => handleModeToggle('video')} className={`flex items-center justify-center px-4 py-1 text-xs font-bold rounded ${mode === 'video' ? 'bg-blue-600 text-white' : 'hover:bg-zinc-700'}`}>VÍDEO</button>
-                    </div>
-                </div>
-                <div className="flex items-center gap-2">
-                    <button onClick={() => handleHistoryNavigation(historyIndex - 1)} disabled={!canUndo || isLoading} className="p-2 rounded-md hover:bg-zinc-800 disabled:opacity-40" title="Desfazer"><Icons.Undo /></button>
-                    <button onClick={() => handleHistoryNavigation(historyIndex + 1)} disabled={!canRedo || isLoading} className="p-2 rounded-md hover:bg-zinc-800 disabled:opacity-40" title="Refazer"><Icons.Redo /></button>
-                    {(generatedImage || generatedVideo) && (
-                        <a href={generatedImage || generatedVideo || '#'} download={`nanobanana-${Date.now()}.${generatedImage ? 'png' : 'mp4'}`} className="text-sm font-semibold py-1.5 px-3 bg-blue-600 hover:bg-blue-500 text-white rounded-md transition-colors flex items-center gap-2 ml-2">
-                            <Icons.Save /> Salvar
-                        </a>
-                    )}
-                </div>
+            <header className="app-header bg-zinc-950/90 backdrop-blur-md border-b border-zinc-800 flex items-center justify-between px-6 z-20 relative">
+                 <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-blue-600/50 to-transparent"></div>
+                <h1 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
+                    <span>🍌 Nano Banana Studio</span>
+                    <span className="text-[10px] font-bold tracking-wider text-white bg-gradient-to-r from-blue-600 to-purple-600 px-2 py-0.5 rounded-full uppercase shadow-lg shadow-blue-900/40">Gemini 3.0</span>
+                </h1>
             </header>
-
-            <aside className="app-toolbar bg-zinc-900 border-r border-zinc-800 flex flex-col items-center p-2 space-y-2">
-                {mode === 'create' && CREATE_FUNCTIONS.map(f => <ToolbarButton key={f.id} data-function={f.id} name={f.name} icon={f.icon} isActive={activeCreateFunction === f.id} onClick={() => handleCreateFunctionClick(f.id)} />)}
-                {mode === 'edit' && EDIT_FUNCTIONS.map(f => <ToolbarButton key={f.id} data-function={f.id} name={f.name} icon={f.icon} isActive={activeEditFunction === f.id} onClick={() => handleEditFunctionClick(f.id)} />)}
-                {mode === 'video' && VIDEO_FUNCTIONS.map(f => <ToolbarButton key={f.id} data-function={f.id} name={f.name} icon={f.icon} isActive={activeVideoFunction === f.id} onClick={() => handleVideoFunctionClick(f.id)} />)}
-            </aside>
-
-            <main
-                ref={mainContentRef}
-                className="app-main flex flex-col bg-zinc-950 overflow-hidden min-h-0"
-                onDragEnter={mode === 'edit' ? handleDragEnter : undefined}
-                onDragOver={mode === 'edit' ? handleDragOver : undefined}
-                onDragLeave={mode === 'edit' ? handleDragLeave : undefined}
-                onDrop={mode === 'edit' ? handleDrop : undefined}
-            >
-                <div className="flex-1 p-4 overflow-hidden relative flex flex-col min-h-0">
-                    <MainContentDisplay />
-                    {compositionLayer && generatedImage && (
-                        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-zinc-900/90 backdrop-blur-sm p-2 rounded-lg shadow-lg flex items-center gap-2 z-10 border border-zinc-700">
-                            <p className="text-sm text-zinc-300 mr-2">Posicionar objeto:</p>
-                            <button onClick={() => setCompositionLayer(null)} className="flex items-center gap-1 px-3 py-1.5 text-sm font-semibold rounded-md bg-zinc-700 hover:bg-zinc-600 transition-colors text-red-400">
-                                <Icons.Close /> Cancelar
-                            </button>
-                            <button onClick={handleConfirmComposition} className="flex items-center gap-1 px-3 py-1.5 text-sm font-semibold rounded-md bg-blue-600 hover:bg-blue-500 text-white transition-colors">
-                                <Icons.Check /> Aplicar
-                            </button>
-                        </div>
-                    )}
-                    {isDragging && (
-                         <div className="absolute inset-4 border-4 border-dashed border-blue-500 bg-blue-500/10 rounded-lg flex items-center justify-center pointer-events-none">
-                             <div className="text-center">
-                                 <Icons.UploadCloud className="text-5xl text-blue-400" />
-                                 <p className="mt-2 text-lg font-semibold text-blue-300">Solte a imagem para editar</p>
-                             </div>
-                         </div>
-                     )}
-                </div>
-                <footer className="h-8 bg-zinc-900 border-t border-zinc-800 shrink-0 flex items-center justify-between px-4 text-xs text-zinc-400">
-                    <div>
-                        {currentImageDimensions && <span>{Math.round(currentImageDimensions.w * zoom)} x {Math.round(currentImageDimensions.h * zoom)} px</span>}
-                    </div>
-                    {generatedImage && (
-                        <div className="flex items-center gap-2">
-                            <button onClick={() => handleZoom(1 / 1.25)} title="Reduzir Zoom" className="p-1 rounded-md hover:bg-zinc-700 disabled:opacity-50" disabled={isLoading || zoom <= 0.1}>
-                                <Icons.ZoomOut className="!text-lg" />
-                            </button>
-                            <button onClick={handleFitToScreen} className="w-14 text-center text-sm font-mono rounded hover:bg-zinc-700 p-1" title="Ajustar à Tela">
-                                {Math.round(zoom * 100)}%
-                            </button>
-                            <button onClick={() => handleZoom(1.25)} title="Aumentar Zoom" className="p-1 rounded-md hover:bg-zinc-700 disabled:opacity-50" disabled={isLoading || zoom >= 5}>
-                                <Icons.ZoomIn className="!text-lg" />
-                            </button>
-                             <button onClick={handleFitToScreen} title="Ajustar à Tela" className="p-1 rounded-md hover:bg-zinc-700 disabled:opacity-50" disabled={isLoading || isFitToScreen}>
-                                <Icons.FitScreen className="!text-lg" />
-                            </button>
-                        </div>
-                    )}
-                </footer>
+            <nav className="app-toolbar bg-zinc-950 border-r border-zinc-800 flex flex-col items-center p-3 gap-3 z-20">
+                <ToolbarButton data-function="create" isActive={mode === 'create'} onClick={() => handleModeToggle('create')} icon={<Icons.Create />} name="Criar" />
+                <ToolbarButton data-function="edit" isActive={mode === 'edit'} onClick={() => handleModeToggle('edit')} icon={<Icons.Edit />} name="Editar" />
+                <ToolbarButton data-function="video" isActive={mode === 'video'} onClick={() => handleModeToggle('video')} icon={<Icons.Video />} name="Vídeo" />
+            </nav>
+            <main className="app-main flex flex-col bg-zinc-950 p-0 relative">
+                 <div className="h-12 shrink-0 bg-zinc-950/50 border-b border-zinc-800 flex items-center px-4 z-10 text-sm gap-2">
+                     {mode === 'create' && CREATE_FUNCTIONS.map(f => <button key={f.id} onClick={() => handleCreateFunctionClick(f.id)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${createState.createFunction === f.id ? 'bg-zinc-100 text-black' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}`}>{f.icon}{f.name}</button>)}
+                     {mode === 'edit' && EDIT_FUNCTIONS.map(f => <button key={f.id} onClick={() => handleEditFunctionClick(f.id)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${editState.editFunction === f.id ? 'bg-zinc-100 text-black' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}`}>{f.icon}{f.name}</button>)}
+                     {mode === 'video' && VIDEO_FUNCTIONS.map(f => <button key={f.id} onClick={() => handleVideoFunctionClick(f.id)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${videoState.videoFunction === f.id ? 'bg-zinc-100 text-black' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}`}>{f.icon}{f.name}</button>)}
+                 </div>
+                 <div className="flex-1 min-h-0 relative">
+                     <MainContentDisplay isLoading={isLoading} loadingMessage={loadingMessage} currentEntry={currentEntry} mode={mode} editState={editState} setEditState={setEditState} canvasRef={editCanvasRef} onConfirm={handleConfirmMontage} onCancel={handleCancelMontage} />
+                 </div>
             </main>
-
-            <aside className="app-sidebar bg-zinc-900 border-l border-zinc-800 flex flex-col">
-                <div className="flex-1 overflow-y-auto">
-                    <PanelSection title="Configurações" icon={<Icons.Settings />} defaultOpen={mode !== 'edit'}>
-                        {mode === 'create' && (
-                            <div className="space-y-3">
-                                {styleOptions[activeCreateFunction].length > 0 && (
-                                    <div>
-                                        <label className="block text-xs font-medium text-zinc-400 mb-1">Estilo</label>
-                                        <div className="custom-select-wrapper">
-                                            <select value={styleModifier} onChange={(e) => setStyleModifier(e.target.value)} className="custom-select" aria-label="Estilo">
-                                                <option value="default" disabled>Selecione um Estilo</option>
-                                                {styleOptions[activeCreateFunction].map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                                            </select>
-                                        </div>
-                                    </div>
-                                )}
-                                <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1">Proporção</label>
-                                    <div className="custom-select-wrapper">
-                                        <select value={aspectRatio} onChange={(e) => setAspectRatio(e.target.value)} className="custom-select" aria-label="Proporção">
-                                            {ALL_SUPPORTED_ASPECT_RATIOS.map((group) => (
-                                                <optgroup label={group.label} key={group.label}>
-                                                    {group.options.map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}
-                                                </optgroup>
-                                            ))}
-                                        </select>
-                                    </div>
-                                </div>
-                                {activeCreateFunction === 'comic' && (
-                                    <div className="flex items-center gap-1 bg-zinc-800 p-1 rounded-md">
-                                        <button onClick={() => setComicColorPalette('vibrant')} className={`w-1/2 text-center text-xs font-semibold py-1 rounded ${comicColorPalette === 'vibrant' ? 'bg-zinc-600' : ''}`}>Vibrante</button>
-                                        <button onClick={() => setComicColorPalette('noir')} className={`w-1/2 text-center text-xs font-semibold py-1 rounded ${comicColorPalette === 'noir' ? 'bg-zinc-600' : ''}`}>Noir</button>
-                                    </div>
-                                )}
-                                {(activeCreateFunction === 'free' || activeCreateFunction === 'comic') && (
-                                    <>
-                                        <div>
-                                            <label className="block text-xs font-medium text-zinc-400 mb-1">Ângulo da Câmera</label>
-                                            <div className="custom-select-wrapper">
-                                                <select value={cameraAngle} onChange={(e) => setCameraAngle(e.target.value)} className="custom-select" aria-label="Ângulo da Câmera">
-                                                    {cameraAngleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                                                </select>
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-medium text-zinc-400 mb-1">Iluminação</label>
-                                            <div className="custom-select-wrapper">
-                                                <select value={lightingStyle} onChange={(e) => setLightingStyle(e.target.value)} className="custom-select" aria-label="Iluminação">
-                                                    {lightingStyleOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                                                </select>
-                                            </div>
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                        )}
-                        {mode === 'edit' && activeEditFunction === 'style' && (
-                             <div className="flex items-center gap-3">
-                                <Slider label="Força" value={styleStrength} min={10} max={100} onChange={(e) => setStyleStrength(Number(e.target.value))} aria-label="Força do estilo" sliderWidthClass='w-full' />
-                                <span className="text-sm font-semibold text-zinc-400 w-10 text-right">{styleStrength}%</span>
-                             </div>
-                        )}
-                        {mode === 'edit' && activeEditFunction === 'compose' && (
-                             <button onClick={handleDetectObjects} disabled={!generatedImage || isDetectingObjects} className="w-full text-sm font-semibold py-2 px-3 bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-800 disabled:cursor-not-allowed rounded-md transition-colors flex items-center justify-center gap-2">
-                                {isDetectingObjects ? <Icons.Spinner /> : <Icons.Visibility />} {isDetectingObjects ? 'Detectando...' : 'Detectar Objetos'}
-                             </button>
-                        )}
-                        {mode === 'video' && activeVideoFunction === 'animation' && (
-                           <ImageUploadSlot id="start-frame-upload" label="Imagem Inicial" icon={<Icons.UploadCloud className="text-3xl" />} imagePreviewUrl={startFramePreview} onUpload={(file) => processSingleFile(file, (img, url) => { setStartFrame(img); setStartFramePreview(url); })} onRemove={() => {setStartFrame(null); setStartFramePreview(null);}} className="h-32" />
-                        )}
-                         {!isLoading && mode === 'edit' && !generatedImage && (
-                             <p className="text-xs text-zinc-500 text-center">Arraste uma imagem para a área de trabalho para começar.</p>
-                         )}
-                    </PanelSection>
-                    
-                     {mode === 'edit' && (
-                        <>
-                        <PanelSection title="Referência" icon={<Icons.Reference />}>
-                             {activeEditFunction === 'compose' ? (
-                                <>
-                                    <div className="grid grid-cols-3 gap-2">
-                                        {referenceImages.slice(0, 6).map((ref, index) => (
-                                            <div 
-                                                key={index} 
-                                                className={`relative group w-full aspect-square bg-zinc-800 rounded-md overflow-hidden ${ref.mask ? 'cursor-grab' : 'cursor-not-allowed'}`}
-                                                draggable={mode === 'edit' && activeEditFunction === 'compose' && !!ref.mask}
-                                                onDragStart={mode === 'edit' && activeEditFunction === 'compose' && !!ref.mask ? (e) => {
-                                                    e.dataTransfer.setData('application/json', JSON.stringify({ index }));
-                                                    const img = e.currentTarget.querySelector('img');
-                                                    if (img) {
-                                                        e.dataTransfer.setDragImage(img, img.width / 2, img.height / 2);
-                                                    }
-                                                } : undefined}
-                                            >
-                                                {ref.isExtractingObject || ref.isMasking ? (
-                                                    <div className="w-full h-full flex items-center justify-center"><Icons.Spinner/></div>
-                                                ) : (
-                                                    <img src={ref.previewUrl} alt={`Referência ${index + 1}`} className="w-full h-full object-contain" />
-                                                )}
-                                                <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    <button onClick={() => handleRemoveReferenceImage(index)} className="p-1.5 bg-zinc-900/80 text-red-400 rounded-full hover:bg-zinc-700" title="Remover"><Icons.Close /></button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                        {referenceImages.length < 6 && <ImageUploadSlot 
-                                            id="ref-upload-compose" 
-                                            label="" 
-                                            icon={<Icons.Add />} 
-                                            imagePreviewUrl={null} 
-                                            onUpload={(file) => processSingleFile(file, (img, url) => {
-                                                const newRef: ReferenceImage = { image: img, previewUrl: url, mask: null, isMasking: true };
-                                                const newIndex = referenceImages.length;
-                                                setReferenceImages(prev => [...prev, newRef]);
-                                        
-                                                generateObjectMask(img)
-                                                    .then(mask => {
-                                                        setReferenceImages(prev => prev.map((ref, index) => 
-                                                            index === newIndex ? { ...ref, mask: mask, isMasking: false } : ref
-                                                        ));
-                                                    })
-                                                    .catch(err => {
-                                                        console.error("Falha ao gerar a máscara automaticamente:", err);
-                                                        setError("Falha ao analisar o objeto da imagem de referência.");
-                                                        setReferenceImages(prev => prev.map((ref, index) => 
-                                                            index === newIndex ? { ...ref, isMasking: false } : ref
-                                                        ));
-                                                    });
-                                            })} 
-                                            onRemove={() => {}} 
-                                            className="aspect-square" 
-                                        />}
-                                    </div>
-                                    <button onClick={() => editorRef.current?.clearMask()} className="w-full text-xs font-semibold py-1.5 mt-2 bg-zinc-800 hover:bg-zinc-700 rounded-md flex items-center justify-center gap-1.5"><Icons.Deselect className="!text-sm" /> Limpar Objetos</button>
-                                    {detectedObjects.length > 0 && (
-                                        <div className="max-h-24 overflow-y-auto space-y-1 pr-1 mt-2 border-t border-zinc-800 pt-2">{detectedObjects.map(obj => (<button key={obj.name} onClick={() => handleGenerateObjectMask(obj)} onMouseEnter={() => setHighlightedObject(obj)} onMouseLeave={() => setHighlightedObject(null)} className="w-full text-left text-xs p-1.5 rounded-md bg-zinc-800 hover:bg-zinc-700">{obj.name}</button>))}</div>
-                                    )}
-                                </>
-                            ) : (
-                                <ImageUploadSlot id="ref-upload-style" label="Estilo" icon={<Icons.UploadCloud className="text-3xl" />} imagePreviewUrl={referenceImages[0]?.previewUrl || null} onUpload={(file) => processSingleFile(file, (img, url) => { setReferenceImages([{ image: img, previewUrl: url, mask: null }]); setIsAnalyzingStyle(true); analyzeImageStyle(img).then(desc => setPrompt(desc)).catch(() => setError("Falha ao analisar estilo.")).finally(() => setIsAnalyzingStyle(false)); })} onRemove={() => handleRemoveReferenceImage(0)} className="h-32" />
-                            )}
-                            {isAnalyzingStyle && <div className="text-xs text-zinc-400 mt-2 flex items-center"><Icons.Spinner className="mr-2"/>Analisando estilo...</div>}
-                        </PanelSection>
-                        <PanelSection title="Filtros Rápidos" icon={<Icons.Filter />} defaultOpen={false}>
-                            <div className="grid grid-cols-2 gap-2">{FILTERS.map(filter => (<button key={filter.name} onClick={() => applyFilter(filter.prompt)} disabled={!generatedImage || isLoading} className="text-xs font-semibold p-2 bg-zinc-800 hover:bg-zinc-700 rounded-md disabled:opacity-50" title={filter.prompt}>{filter.name}</button>))}</div>
-                        </PanelSection>
-                        </>
-                     )}
-
-                    {history.length > 0 && (
-                         <PanelSection title="Histórico" icon={<Icons.History />} defaultOpen={true}>
-                             <div className="grid grid-cols-4 gap-2">
-                                 {history.map((entry, index) => (
-                                     <button key={entry.id} onClick={() => handleHistoryNavigation(index)} className={`relative w-full aspect-square rounded-md overflow-hidden ring-2 transition-all ${index === historyIndex ? 'ring-blue-500' : 'ring-transparent hover:ring-zinc-600'}`}>
-                                        {(entry.imageUrl || entry.startFramePreviewUrl) && <img src={entry.imageUrl || entry.startFramePreviewUrl} alt={`History ${index + 1}`} className="w-full h-full object-cover" />}
-                                        {entry.videoUrl && <div className="w-full h-full bg-black flex items-center justify-center"><Icons.Video className="text-zinc-500" /></div>}
-                                         <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent"></div>
-                                         <span className="absolute bottom-0.5 right-1 text-xs font-bold text-white bg-black/50 px-1 rounded">{index + 1}</span>
-                                     </button>
-                                 ))}
-                             </div>
-                         </PanelSection>
-                     )}
-                </div>
-                <div className="shrink-0 border-t border-zinc-800">
-                    {(mode === 'create' || mode === 'edit') && (
-                        <PanelSection title="Prompt Negativo" icon={<Icons.Block />} defaultOpen={false}>
-                            <textarea
-                                ref={negativeTextareaRef} value={negativePrompt} onChange={(e) => setNegativePrompt(e.target.value)}
-                                placeholder="Evite baixa qualidade, texto, deformidades..."
-                                rows={2} className="w-full bg-zinc-800 rounded-md p-2 text-sm text-zinc-300 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none transition-shadow" disabled={isLoading}
-                            />
-                        </PanelSection>
-                    )}
-                    <PanelSection title="Prompt" icon={<Icons.Prompt />} className="!border-b-0">
-                         <form onSubmit={handleSubmit} className="space-y-3">
-                            <textarea
-                                ref={textareaRef} value={prompt} onChange={(e) => setPrompt(e.target.value)}
-                                placeholder={ mode === 'create' ? "Um astronauta surfando em um anel de saturno..." : mode === 'edit' ? "Adicione um chapéu de cowboy na pessoa..." : "Um close-up de uma gota de chuva..." }
-                                rows={3} className="w-full bg-zinc-800 rounded-md p-2 text-sm text-zinc-300 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none transition-shadow" disabled={isLoading}
-                            />
-                             <button type="submit" disabled={isLoading || (!prompt && mode !== 'edit') || !!compositionLayer} className="w-full flex items-center justify-center gap-2 py-2.5 px-3 bg-blue-600 rounded-md text-white font-semibold hover:bg-blue-500 transition-colors disabled:bg-zinc-700 disabled:cursor-not-allowed">
-                                 {isLoading ? <Icons.Spinner /> : <Icons.Sparkles className="!text-lg" />}
-                                 <span>Gerar</span>
-                             </button>
-                        </form>
-                         {error && <div className="mt-2 p-2 bg-red-900/50 border border-red-800 text-red-300 text-xs rounded-md flex items-start gap-2"><Icons.AlertCircle className="shrink-0 mt-0.5 !text-base" /><span>{error}</span><button onClick={() => setError(null)} className="ml-auto p-0.5 text-red-300 hover:text-white"><Icons.Close className="!text-base" /></button></div>}
-                    </PanelSection>
-                </div>
-            </aside>
+            <Sidebar {...{ mode, createState, setCreateState, videoState, setVideoState, editState, setEditState, prompt, setPrompt, isLoading, error, setError, history, historyIndex, handleHistoryNavigation, handleSubmit, processSingleFile, preMontageState, setPreMontageState }} />
         </>
     );
 }
